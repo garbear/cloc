@@ -302,26 +302,6 @@ sub make_file_list { # {{{1
 #print "make_file_list dir=$dir\n";
         find(\&files, $dir);  # populates global variable @file_list
     }
-    # The files() subroutine when invoked by find() for some
-    # reason is unable to filter out binary files and directories.
-    # Do that here instead.
-    {
-        my @clean_file_list = ();
-        my $n = 0;
-        my $total = scalar @file_list;
-        foreach (@file_list) {
-            ++$n;
-            printf "%4.1f%% filter 1\r", 100*$n/$total unless $n % 500;
-            print "make_file_list cleanup examining $_\n" if $opt_v > 3;
-            if ((!-s) or (-B) or is_dir($_)) { 
-                # avoid directories, sockets, 0 sized files, named pipes
-                $rh_ignored->{$_} = 1;
-                next;
-            }
-            push @clean_file_list, $_;
-        }
-        @file_list = @clean_file_list;
-    }
     $nFiles_Found = scalar @file_list;
     printf "%8d text files.\n", $nFiles_Found;
     if ($keep_found) {
