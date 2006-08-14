@@ -377,11 +377,15 @@ sub remove_duplicate_files { # {{{1
 sub files { # {{{1
     # invoked by File::Find's find()   Populates global variable @file_list
     my $nBytes = -s     $_ ;
+    if (!$nBytes and $opt_v > 5) {
+        printf "files(%s)  zero size\n", $File::Find::name;
+    }
+    return unless $nBytes  ; # attempting other tests w/pipe or socket will hang
     my $is_dir = is_dir($_);
     my $is_bin = -B     $_ ;
     printf "files(%s)  size=%d is_dir=%d  -B=%d\n",
         $File::Find::name, $nBytes, $is_dir, $is_bin if $opt_v > 5;
-    return if !$nBytes or $is_dir or $is_bin;
+    return if $is_dir or $is_bin;
     ++$nFiles_Found;
     printf "%8d files\r", $nFiles_Found unless $nFiles_Found % $progress_rate;
     push @file_list, $File::Find::name;
