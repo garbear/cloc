@@ -376,12 +376,15 @@ sub remove_duplicate_files { # {{{1
 } # 1}}}
 sub files { # {{{1
     # invoked by File::Find's find()   Populates global variable @file_list
-    my $file = "$File::Find::dir/$_";
-    print "find->$file\n" if $opt_v > 5;
-    return if (!-s $file) or is_dir($file) or (-B $file);  # doesn't work.  why?
+    my $nBytes = -s     $_ ;
+    my $is_dir = is_dir($_);
+    my $is_bin = -B     $_ ;
+    printf "files(%s)  size=%d is_dir=%d  -B=%d\n",
+        $File::Find::name, $nBytes, $is_dir, $is_bin if $opt_v > 5;
+    return if !$nBytes or $is_dir or $is_bin;
     ++$nFiles_Found;
     printf "%8d files\r", $nFiles_Found unless $nFiles_Found % $progress_rate;
-    push @file_list, $file;
+    push @file_list, $File::Find::name;
 } # 1}}}
 sub is_file { # {{{1
     # portable method to test if item is a file
@@ -466,8 +469,8 @@ sub peek_at_first_line { # {{{1
 #print "peek_at_first_line first_line=$first_line\n";
         if ($first_line =~ /^#\!(.*?)$/) {
             my @pound_bang = split(' ', $1);
-#print "peek_at_first_line pound_bang=@pound_bang\n";
-            if (basename $pound_bang[0] eq "env" and 
+#print "peek_at_first_line basename 0=[", basename($pound_bang[0]), "]\n";
+            if (basename($pound_bang[0]) eq "env" and 
                 scalar @pound_bang > 1) {
                 $script_language = $pound_bang[1];
 #print "peek_at_first_line pound_bang A $pound_bang[1]\n";
