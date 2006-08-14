@@ -1,0 +1,1822 @@
+#!/usr/bin/env perl
+ 
+# cloc -- Count Lines of Code {{{1
+# Copyright (C) 2006 Northrop Grumman Corporation
+# Author:  Al Danial <al.danial@gmail.com>
+#
+# Includes code from SLOCCount http://www.dwheeler.com/sloccount/
+# by David Wheeler.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details:
+# http://www.gnu.org/licenses/gpl.txt
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# 1}}}
+require 5.006;
+use warnings;
+use strict;
+use Getopt::Long;
+use File::Basename;
+use File::Temp qw { tempfile };
+use File::Find;
+use IO::File;
+use Digest::MD5;
+#use Data::Dumper::Simple;
+#
+# Albert Danial     July 31 2006
+#
+$| = 1;  # flush stdout
+my $nFiles_Found = 0;
+
+my $script = basename $0;
+my $usage  = "
+Usage: $script [options] <file(s)/dir(s)>
+
+ Count physical lines of source code in the given files and/or
+ recursively below the given directories.
+
+ Options:
+   -v[=<n>]                  Verbose switch (optional numeric value).
+   --keep_found=<file>       Save names of every file found to <file>.
+   --keep_categorized=<file> Save names of categorized files to <file>.
+   --keep_ignored=<file>     Save names of ignored files to <file>.
+   --keep_counted=<file>     Save names of processed source files to <file>.
+   --show_ext[=<ext>]        Print information about all known (or just the
+                             given) file extensions and exit.
+   --show_lang[=<lang>]      Print information about all known (or just the
+                             given) languages and exit.
+   --progress_rate=<n>       Show progress update after every <n> files are
+                             processed (default <n>=1000).
+";
+my ($keep_found, $keep_categorized, $keep_ignored, $keep_counted, 
+    $show_ext, $show_lang, $progress_rate, $opt_v,
+    %Error_Codes, %Language_by_Extension, %Language_by_Script,
+    %Filters_by_Language, %Not_Code_Extensions, %Not_Code_Filename,
+    %Scale_Factor,
+   );
+GetOptions(
+           "keep_found=s"        => \$keep_found       ,
+           "keep_categorized=s"  => \$keep_categorized ,
+           "keep_ignored=s"      => \$keep_ignored     ,
+           "keep_counted=s"      => \$keep_counted     ,
+           "show_ext:s"          => \$show_ext         ,
+           "show_lang:s"         => \$show_lang        ,
+           "progress_rate=i"     => \$progress_rate    ,
+           "v:i"                 => \$opt_v            ,
+          );
+# Options defaults:
+$progress_rate  = 1000 unless $progress_rate;
+$opt_v          =    0 unless $opt_v;
+die $usage unless defined $show_lang or defined $show_ext or scalar @ARGV >= 1;
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+# Step 1:  Initialize global constants.
+#
+set_constants(               #        Sample values:
+    \%Error_Codes          , # Error_Codes{UNABLE_TO_READ} = -1
+    \%Language_by_Extension, # Language_by_Extension{f}    = 'Fortran 77' 
+    \%Language_by_Script   , # Language_by_Script{sh}      = 'Bourne Shell'
+    \%Filters_by_Language  , # Filters_by_Language{Bourne Shell}[0] = 
+                             #      [ 'remove_matches' , '#'  ]
+    \%Not_Code_Extensions  , # Not_Code_Extensions{jpg}    = 1
+    \%Not_Code_Filename    , # Not_Code_Filename{README}   = 1
+    \%Scale_Factor         , # Scale_Factor{Perl}          = 4.0
+    );
+print_extension_info($show_ext) if defined $show_ext;
+print_language_info($show_lang) if defined $show_lang;
+exit if (defined $show_ext) or (defined $show_lang);
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+# Step 2:  a) Create a list of every file that might contain source
+#             code.  Ignore binary files, zero-sized files, and
+#             any file in a directory the user says to exclude.
+#          b) Determine the language for each file in the list.
+#
+my @Errors    = ();
+my @file_list = ();  # global variable updated in files()
+my %Ignored   = ();  # files that are not counted (language not recognized)
+my $fh = make_file_list(\@ARGV, \%Error_Codes, \@Errors, \%Ignored);
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+# Step 3:  Remove multiple copies of the same file.
+#
+my %Language           = ();
+my %unique_source_file = ();
+remove_duplicate_files($fh, \%Language, \%unique_source_file);
+printf "%8d unique files.\n", scalar keys %unique_source_file;
+exit unless scalar keys %unique_source_file;
+
+# print Dumper(%Language, %Filters_by_Language);
+# print "Main:  ", Dumper(@{$Filters_by_Language{'C'}}), "\n";
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+# Step 4:  Count the lines of code, comments, and blank lines in
+#          in each source file.
+#
+my %Results_by_Language = ();
+foreach my $file (sort keys %unique_source_file) {
+    next if $Ignored{$file};
+    my $basename = basename $file;
+    if (!defined $Filters_by_Language{$Language{$file}} or
+        $Not_Code_Filename{$basename}                   or
+        $file =~ m{~$}) {   # file name ends with ~  (a temp edit file)
+        $Ignored{$file} = 1;
+        next;
+    }
+#print "Main:  file=$file lang=$Language{$file}\n";
+#print "Main:  C_by_L "; 
+#print Dumper($Language{$file});
+#print Dumper($Filters_by_Language{'C'});
+#print Dumper($Filters_by_Language{$Language{$file}});
+#print "\n";
+    my ($all_line_count,
+        $blank_count   ,
+        $comment_count ,
+       ) = call_counter($file, $Language{$file});
+#printf "%-30s %-10s all=%5d blank=%5d comment=%5d\n", 
+#$file            ,
+#$Language{$file} ,
+#$all_line_count  ,
+#$blank_count     ,
+#$comment_count   ;
+    ++$Results_by_Language{$Language{$file}}{'nFiles'};
+    $Results_by_Language{$Language{$file}}{'code'}    += $all_line_count -
+                                                         $blank_count    -
+                                                         $comment_count ;
+    $Results_by_Language{$Language{$file}}{'blank'}   += $blank_count;
+    $Results_by_Language{$Language{$file}}{'comment'} += $comment_count;
+}
+if ($keep_ignored) {
+    my $OUT = new IO::File $keep_ignored, "w";
+    print $OUT join("\n", sort keys %Ignored), "\n";
+    $OUT->close;
+}
+if ($keep_counted) {
+    my $OUT = new IO::File $keep_counted, "w";
+    print $OUT join("\n", sort keys %Language), "\n";
+    $OUT->close;
+}
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+# Step 5:  Print the results.
+#
+printf "%8d files ignored.\n", scalar keys %Ignored;
+if (@Errors) {
+    printf "%d errors:\n", scalar @Errors;
+    print Dumper(@Errors) if @Errors;
+}
+print_report(\%Results_by_Language, \%Scale_Factor);
+
+sub print_report { # {{{1
+    my ($rhh_count, # in  count{language}{nFiles|code|blank|comment}
+        $rh_scale , # in
+       ) = @_;
+
+    printf "\n%-14s %9s %9s %9s %9s %8s   %14s\n",
+        "Language"      ,
+        "files"         ,
+        "blank"         ,
+        "comments"      ,
+        "code"          ,
+        "scale"         ,
+        "3rd gen. equiv";
+    print '-' x 80, "\n";
+
+    my $sum_files     = 0;
+    my $sum_code      = 0;
+    my $sum_blank     = 0;
+    my $sum_comment   = 0;
+    my $sum_scaled    = 0;
+    foreach my $language (sort {
+                                 $rhh_count->{$b}{'code'} <=>
+                                 $rhh_count->{$a}{'code'}
+                               }
+                          keys %{$rhh_count}) {
+        die "No scale factor for $language"
+            unless defined $rh_scale->{$language};
+        my $scaled = $rh_scale->{$language}*$rhh_count->{$language}{'code'};
+        printf "%-14s %9d %9d %9d %9d x %6.2f = %14.2f\n",
+            $language                         ,
+            $rhh_count->{$language}{'nFiles'} ,
+            $rhh_count->{$language}{'blank'}  ,
+            $rhh_count->{$language}{'comment'},
+            $rhh_count->{$language}{'code'}   ,
+            $rh_scale->{$language}            ,
+            $scaled                           ;
+        $sum_files   += $rhh_count->{$language}{'nFiles'} ;
+        $sum_blank   += $rhh_count->{$language}{'blank'}  ;
+        $sum_comment += $rhh_count->{$language}{'comment'};
+        $sum_code    += $rhh_count->{$language}{'code'}   ;
+        $sum_scaled  += $scaled;
+    }
+    print '-' x 80, "\n";
+    printf "%-14s %9d %9d %9d %9d %10s %14.2f\n",
+        "SUM:"       ,
+        $sum_files   ,
+        $sum_blank   ,
+        $sum_comment ,
+        $sum_code    ,
+        ' '          ,
+        $sum_scaled  ;
+} # 1}}}
+sub print_extension_info { # {{{1
+    my ($extension,) = @_;
+    if ($extension) {  # show information on this extension
+        foreach my $ext (sort {lc $a cmp lc $b } keys %Language_by_Extension) {
+            # Language_by_Extension{f}    = 'Fortran 77' 
+            printf "%-12s -> %s\n", $ext, $Language_by_Extension{$ext}
+                if $ext =~ m{$extension}i;
+        }
+    } else {           # show information on all  extensions
+        foreach my $ext (sort {lc $a cmp lc $b } keys %Language_by_Extension) {
+            # Language_by_Extension{f}    = 'Fortran 77' 
+            printf "%-12s -> %s\n", $ext, $Language_by_Extension{$ext};
+        }
+    }
+} # 1}}}
+sub print_language_info { # {{{1
+    my ($language,) = @_;
+    if ($language) {  # show information on this language
+        foreach my $ext (sort {lc $a cmp lc $b } keys %Language_by_Extension) {
+            # Language_by_Extension{f}    = 'Fortran 77' 
+            printf "%-20s (%s)\n", $Language_by_Extension{$ext}, $ext
+                if $Language_by_Extension{$ext} =~ m{$language}i;
+        }
+    } else {          # show information on all  languages
+        foreach my $ext (sort {lc $a cmp lc $b } keys %Language_by_Extension) {
+            # Language_by_Extension{f}    = 'Fortran 77' 
+            printf "%-20s (%s)\n", $Language_by_Extension{$ext}, $ext;
+        }
+    }
+} # 1}}}
+
+sub make_file_list { # {{{1
+    my ($ra_arg_list,  # in   file and/or directory names to examine
+        $rh_Err     ,  # in   hash of error codes
+        $raa_errors ,  # out  errors encountered
+        $rh_ignored ,  # out  files not recognized as computer languages
+        ) = @_;
+
+    my ($fh, $filename);
+    if ($keep_categorized) {
+        $filename = $keep_categorized;
+        $fh = new IO::File $filename, "+>";  # open for read/write
+        die "Unable to write to $filename:  $!\n" unless defined $fh;
+    } else {
+        ($fh, $filename) = tempfile(UNLINK => 1);  # delete file on exit
+        print "Using temp file list [$filename]\n";
+    }
+
+    my @dir_list = ();
+    foreach my $file_or_dir (@{$ra_arg_list}) {
+#print "make_file_list file_or_dir=$file_or_dir\n";
+        my $size_in_bytes = 0;
+        if (!-r $file_or_dir) {
+            push @{$raa_errors}, [$rh_Err->{'UNABLE_TO_READ'} , $file_or_dir];
+            next;
+        }
+        if      (is_file($file_or_dir)) {
+            if (!(-s $file_or_dir) # avoid named pipes, sockets, 0 sized files
+                or (-B $file_or_dir)) { # avoid binary files
+                $rh_ignored->{$file_or_dir} = 1;
+                next;
+            }
+            push @file_list, "$file_or_dir";
+        } elsif (is_dir ($file_or_dir)) {
+            push @dir_list, $file_or_dir;
+        } else {
+            push @{$raa_errors}, [$rh_Err->{'NOT_FILE_NOT_DIR'} , $file_or_dir];
+        }
+    }
+    foreach my $dir (@dir_list) {
+#print "make_file_list dir=$dir\n";
+        find(\&files, $dir);  # populates global variable @file_list
+    }
+    # The files() subroutine when invoked by find() for some
+    # reason is unable to filter out binary files and directories.
+    # Do that here instead.
+    {
+        my @clean_file_list = ();
+        my $n = 0;
+        my $total = scalar @file_list;
+        foreach (@file_list) {
+            ++$n;
+            printf "%4.1f%% filter 1\r", 100*$n/$total unless $n % 500;
+            print "make_file_list cleanup examining $_\n" if $opt_v > 3;
+            if ((!-s) or (-B) or is_dir($_)) { 
+                # avoid directories, sockets, 0 sized files, named pipes
+                $rh_ignored->{$_} = 1;
+                next;
+            }
+            push @clean_file_list, $_;
+        }
+        @file_list = @clean_file_list;
+    }
+    $nFiles_Found = scalar @file_list;
+    printf "%8d text files.\n", $nFiles_Found;
+    if ($keep_found) {
+        my $OUT = new IO::File $keep_found, "w";
+        print $OUT join("\n", sort @file_list), "\n";
+        $OUT->close;
+    }
+
+    my $nFiles_Categorized = 0;
+    foreach my $file (@file_list) {
+printf "classification of $file\n" if $opt_v > 2;
+        my $size_in_bytes = (stat $file)[7];
+
+        my $language      = classify_file($file      ,
+                                          $rh_Err    ,
+                                          $raa_errors,
+                                          $rh_ignored);
+die  "make_file_list($file) undef size" unless defined $size_in_bytes;
+die  "make_file_list($file) undef lang" unless defined $language;
+        printf $fh "%d,%s,%s\n", $size_in_bytes, $language, $file;
+        ++$nFiles_Categorized;
+        printf "Categorized %8d files\r", 
+            $nFiles_Categorized unless $nFiles_Categorized %  500;
+    }
+
+    return $fh;   # handle to the file containing the list of files to process
+}  # 1}}}
+sub remove_duplicate_files { # {{{1
+    my ($fh                   , # in 
+        $rh_Language          , # out
+        $rh_unique_source_file, # out
+        ) = @_;
+
+    # Check for duplicate files by comparing file sizes.
+    # Where files are equally sized, compare their MD5 checksums.
+
+    my %files_by_size = (); # files_by_size{ # bytes } = [ list of files ]
+    seek($fh, 0, 0); # rewind to beginning of the temp file
+    while (<$fh>) {
+        my ($size_in_bytes, $language, $file) = split(/,/, $_, 3);
+        chomp($file);
+        $rh_Language->{$file} = $language;
+        push @{$files_by_size{$size_in_bytes}}, $file;
+    }
+    foreach my $bytes (sort {$a <=> $b} keys %files_by_size) {
+        $rh_unique_source_file->{$files_by_size{$bytes}[0]} = 1;
+        next unless scalar @{$files_by_size{$bytes}} > 1;
+        foreach my $F (different_files( @{$files_by_size{$bytes}} )) {
+            $rh_unique_source_file->{$F} = 1;
+        }
+    }
+} # 1}}}
+sub files { # {{{1
+    # invoked by File::Find's find()   Populates global variable @file_list
+    my $file = "$File::Find::dir/$_";
+    print "find->$file\n" if $opt_v > 5;
+    return if (!-s $file) or is_dir($file) or (-B $file);  # doesn't work.  why?
+    ++$nFiles_Found;
+    printf "%8d files\r", $nFiles_Found unless $nFiles_Found % $progress_rate;
+    push @file_list, $file;
+} # 1}}}
+sub is_file { # {{{1
+    # portable method to test if item is a file
+    # (-f doesn't work in ActiveState Perl on Windows)
+    my $item = shift @_;
+
+    my $mode = (stat $item)[2];
+       $mode = 0 unless $mode;
+    if ($mode & 0100000) { return 1; } 
+    else                 { return 0; }
+} # 1}}}
+sub is_dir { # {{{1
+    # portable method to test if item is a directory
+    # (-d doesn't work in ActiveState Perl on Windows)
+    my $item = shift @_;
+
+    my $mode = (stat $item)[2];
+       $mode = 0 unless $mode;
+    if ($mode & 0040000) { return 1; } 
+    else                 { return 0; }
+} # 1}}}
+sub classify_file { # {{{1
+    my ($full_file   , # in
+        $rh_Err      , # in   hash of error codes
+        $raa_errors  , # out
+        $rh_ignored  , # out
+       ) = @_;
+
+    print "-> classify_file($full_file)\n" if $opt_v > 2;
+
+    my $language = "(unknown)";
+
+    my $file = basename $full_file; 
+    if ($file =~ /\.(\w+)$/) { # has an extension
+        print "$full_file extension=[$1]\n" if $opt_v > 2;
+        my $extension = $1;
+        return $language if $Not_Code_Extensions{$extension}; # (unknown)
+        if (defined $Language_by_Extension{$extension}) {
+            return $Language_by_Extension{$extension};
+        } else {
+            return $language; # (unknown)
+        }
+    } else {                   # no file extension
+        # maybe it is a shell/Perl/Python/Ruby/etc script that
+        # starts with pound bang:
+        #   #!/usr/bin/perl
+        #   #!/usr/bin/env perl
+        my $script_language = peek_at_first_line($full_file , 
+                                                 $rh_Err    , 
+                                                 $raa_errors);
+        if (defined $Language_by_Script{$script_language}) {
+            $language = $Language_by_Script{$script_language};
+        } else {
+            $rh_ignored->{$full_file} = 1;
+            # returns (unknown)
+        }
+    }
+    print "<- classify_file($full_file)\n" if $opt_v > 2;
+    return $language;
+} # 1}}}
+sub peek_at_first_line { # {{{1
+    my ($file        , # in
+        $rh_Err      , # in   hash of error codes
+        $raa_errors  , # out
+       ) = @_;
+
+    print "-> peek_at_first_line($file)\n" if $opt_v > 2;
+
+    my $script_language = "";
+    if (!-r $file) {
+        push @{$raa_errors}, [$rh_Err->{'UNABLE_TO_READ'} , $file];
+        return $script_language;
+    }
+    my $IN = new IO::File $file, "r";
+    if (!defined $IN) {
+        push @{$raa_errors}, [$rh_Err->{'UNABLE_TO_READ'} , $file];
+        print "<- peek_at_first_line($file)\n" if $opt_v > 2;
+        return $script_language;
+    }
+    chomp(my $first_line = <$IN>);
+    if (defined $first_line) {
+#print "peek_at_first_line first_line=$first_line\n";
+        if ($first_line =~ /^#\!(.*?)$/) {
+            my @pound_bang = split(' ', $1);
+#print "peek_at_first_line pound_bang=@pound_bang\n";
+            if (basename $pound_bang[0] eq "env" and 
+                scalar @pound_bang > 1) {
+                $script_language = $pound_bang[1];
+#print "peek_at_first_line pound_bang A $pound_bang[1]\n";
+            } else {
+                $script_language = basename $pound_bang[0];
+#print "peek_at_first_line pound_bang B $script_language\n";
+            }
+        }
+    }
+    $IN->close;
+    print "<- peek_at_first_line($file)\n" if $opt_v > 2;
+    return $script_language;
+} # 1}}}
+sub different_files { # {{{1
+    # See which of the given files are unique by computing each files MD5
+    # sum.  Return the subset of files which are unique.
+    my (@files) = @_;
+
+    print "-> different_files(@files)\n" if $opt_v > 2;
+    my %file_hash = ();  # file_hash{ md5 hash } = file name
+    foreach my $F (@files) {
+        next if is_dir($F);  # needed for Windows
+        my $IN = new IO::File $F, "r";
+        if (!defined $IN) {
+            warn "different_files:  unable to read $F";
+            next;
+        }
+        binmode $IN;
+#       $file_hash{ $F } = $F;
+        $file_hash{ Digest::MD5->new->addfile($IN)->hexdigest } = $F;
+        $IN->close;
+    }
+    my @unique = values %file_hash;
+    print "<- different_files(@unique)\n" if $opt_v > 2;
+    return @unique;
+} # 1}}}
+
+sub call_counter { # {{{1
+    my ($file    , # in
+        $language, # in
+       ) = @_;
+
+    # Logic:  pass the file through the following filters:
+    #         1. remove blank lines
+    #         2. remove comments using each filter defined for this language
+    #            (example:  SQL has two, remove_starts_with(--) and 
+    #             remove_c_comments() )
+    #         3. compute comment lines as 
+    #               total lines - blank lines - lines left over after all
+    #                   comment filters have been applied
+
+    print "-> call_counter($file)\n" if $opt_v > 2;
+    my @routines = @{$Filters_by_Language{$language}};
+#print "call_counter:  ", Dumper(@routines), "\n";
+
+    my $IN = new IO::File $file, "r";
+    my @lines = <$IN>;
+    $IN->close;
+    # Some files don't end with a new line.  Force this:
+    $lines[$#lines] .= "\n" unless $lines[$#lines] =~ m/\n$/;
+
+    my $total_lines = scalar @lines;
+
+    @lines = remove_matches(\@lines, '^\s*$'); # removes blank lines
+    my $blank_lines = $total_lines - scalar @lines;
+
+    foreach my $call_string (@routines) {
+#print "call_counter:  call_string=", Dumper($call_string), "\n";
+        my $subroutine = $call_string->[0];
+die "call_counter undefined subroutine $subroutine for $file\n" 
+    unless defined &{$subroutine};
+        print "call_counter file=$file sub=$subroutine\n" if $opt_v > 1;
+        my @args  = @{$call_string};
+        shift @args; # drop the subroutine name
+        no strict 'refs';
+        @lines = &{$subroutine}(\@lines, @args);   # apply filter...
+        @lines = remove_matches(\@lines, '^\s*$'); # ...then remove blank lines
+#printf "call_counter after calling %s have %d lines of code [\n%s]\n",
+#$subroutine, scalar  @lines, join("\n", @lines);
+    }
+    my $comment_lines = $total_lines - $blank_lines - scalar  @lines;
+
+    print "<- call_counter($total_lines, $blank_lines, $comment_lines)\n" 
+        if $opt_v > 2;
+    return ($total_lines, $blank_lines, $comment_lines);
+} # 1}}}
+sub remove_c_comments { # {{{1
+    my ($ra_lines, ) = @_;
+
+    # http://search.cpan.org/~jhi/perl-5.8.0/pod/perlfaq6.pod#How_do_I_use_a_regular_expression_to_strip_C_style_comments_from_a_file%3F
+##  my $MARKER = ">>C COMMENT<<";
+
+    print "-> remove_c_comments\n" if $opt_v > 2;
+
+    my $all_lines = join("", @{$ra_lines});
+
+##  my $MARKER = ">>C COMMENT<<";  # simplifies counting of C comments
+
+    no warnings;  # else "Use of uninitialized value in substitution iterator"
+    $all_lines =~ s#/\*[^*]*\*+([^/*][^*]*\*+)*/|("(\\.|[^"\\])*"|'(\\.|[^'\\])*'|.[^/"'\\]*)#$2#gs;
+
+##  foreach (@no_comments) {
+##      ++$comment_count if m{^\s*$MARKER$MARKER\s*$}  or #  /* xxx */
+##                          m{^\s*$MARKER/$MARKER/};      #  // xxx
+##      ++$blank_count   if m{^\s*$};
+##  }
+
+    print "<- remove_c_comments\n" if $opt_v > 2;
+    return split("\n", $all_lines);
+} # 1}}}
+sub remove_f77_comments { # {{{1
+    my ($ra_lines, ) = @_;
+    print "-> remove_f77_comments\n" if $opt_v > 2;
+
+    my @save_lines = ();
+    foreach (@{$ra_lines}) {
+        next if m{^[*cC]};
+        push @save_lines, $_;
+    }
+
+    print "<- remove_f77_comments\n" if $opt_v > 2;
+    return @save_lines;
+} # 1}}}
+sub remove_f90_comments { # {{{1
+    # derived from SLOCCount
+    my ($ra_lines, ) = @_;
+    print "-> remove_f90_comments\n" if $opt_v > 2;
+
+    my @save_lines = ();
+    foreach (@{$ra_lines}) {
+        # a comment is              m/^\s*!/
+        # an empty line is          m/^\s*$/
+        # a HPF statement is        m/^\s*!hpf\$/i
+        # an Open MP statement is   m/^\s*!omp\$/i
+        if (! m/^(\s*!|\s*$)/ || m/^\s*!(hpf|omp)\$/i) {
+            push @save_lines, $_;
+        }
+    }
+
+    print "<- remove_f90_comments\n" if $opt_v > 2;
+    return @save_lines;
+} # 1}}}
+sub remove_matches { # {{{1
+    my ($ra_lines, $pattern, ) = @_;
+    print "-> remove_matches(pattern=$pattern)\n" if $opt_v > 2;
+
+    my @save_lines = ();
+    foreach (@{$ra_lines}) {
+        next if m{$pattern};
+        push @save_lines, $_;
+    }
+
+    print "<- remove_matches\n" if $opt_v > 2;
+    return @save_lines;
+} # 1}}}
+sub remove_below { # {{{1
+    my ($ra_lines, $marker, ) = @_;
+    print "-> remove_below(marker=$marker)\n" if $opt_v > 2;
+
+    my @save_lines = ();
+    foreach (@{$ra_lines}) {
+        last if m{$marker};
+        push @save_lines, $_;
+    }
+
+    print "<- remove_below\n" if $opt_v > 2;
+    return @save_lines;
+} # 1}}}
+sub remove_cobol_comments { # {{{1
+    # subroutines derived from SLOCCount
+    my ($ra_lines, ) = @_;
+
+    my $free_format = 0;  # Support "free format" source code.
+    my @save_lines  = ();
+  
+    foreach (@{$ra_lines}) {
+        if (m/^......\$.*SET.*SOURCEFORMAT.*FREE/i) {$free_format = 1;}
+        if ($free_format) {
+            push @save_lines, $_ unless m{^\s*[\*\/]};
+        } else {
+            push @save_lines, $_ unless m{^......[\*\/]} or
+                                        m{^[\*\/]};
+        }
+    }
+    return @save_lines;
+} # 1}}}
+sub remove_html_comments { # {{{1
+    my ($ra_lines, ) = @_;
+
+    print "-> remove_html_comments\n" if $opt_v > 2;
+
+    my @save_lines = ();
+    my $in_comment = 0;
+    foreach (@{$ra_lines}) {
+        next if /^\s*$/;
+        s/<\!\-\-.*?\-\->//g;  # strip one-line comments
+        next if /^\s*$/;
+        if ($in_comment) {
+            if (/\-\->/) {
+                s/^.*?\-\->//;
+                $in_comment = 0;
+            }
+        }
+        next if /^\s*$/;
+        $in_comment = 1 if /^(.*?)<\!\-\-/;
+        next if defined $1 and $1 =~ /^\s*$/;
+        push @save_lines, $_;
+    }
+
+    print "<- remove_html_comments\n" if $opt_v > 2;
+    return @save_lines;
+} # 1}}}
+sub remove_jcl_comments { # {{{1
+    my ($ra_lines, ) = @_;
+
+    print "-> remove_jcl_comments\n" if $opt_v > 2;
+
+    my @save_lines = ();
+    my $in_comment = 0;
+    foreach (@{$ra_lines}) {
+        next if /^\s*$/;
+        next if m{^\s*//\*};
+        last if m{^\s*//\s*$};
+        push @save_lines, $_;
+    }
+
+    print "<- remove_jcl_comments\n" if $opt_v > 2;
+    return @save_lines;
+} # 1}}}
+
+sub set_constants { # $rh_Error_Codes  {{{1
+    my ($rh_Error_Codes           , # out
+        $rh_Language_by_Extension , # out
+        $rh_Language_by_Script    , # out
+        $rhaa_Filters_by_Language , # out
+        $rh_Not_Code_Extensions   , # out
+        $rh_Not_Code_Filename     , # out
+        $rh_Scale_Factor          , # out
+       ) = @_;
+%{$rh_Error_Codes} = (
+            'UNABLE_TO_READ'    => -1,
+            'NOT_FILE_NOT_DIR'  => -2,
+            );
+# 1}}}
+%{$rh_Language_by_Extension} = ( # {{{1
+            'ada'         => 'Ada'                   ,
+            'adb'         => 'Ada'                   ,
+            'ads'         => 'Ada'                   ,
+            'pad'         => 'Ada'                   , # Oracle Ada preprocessor
+            'c'           => 'C'                     ,
+            'ec'          => 'C'                     ,
+            'pgc'         => 'C'                     , # Postgres embedded C/C++
+            'C'           => 'C++'                   ,
+            'cpp'         => 'C++'                   ,
+            'cxx'         => 'C++'                   ,
+            'cc'          => 'C++'                   ,
+            'pcc'         => 'C++'                   , # Oracle C++ preprocessor
+            'cs'          => 'C#'                    ,
+            'cob'         => 'COBOL'                 ,
+            'cbl'         => 'COBOL'                 ,
+            'COB'         => 'COBOL'                 ,
+            'CBL'         => 'COBOL'                 ,
+            'h'           => 'C/C++ Header'          ,
+            'H'           => 'C/C++ Header'          ,
+            'hpp'         => 'C/C++ Header'          ,
+            'hh'          => 'C/C++ Header'          ,
+            "html"        => "HTML"                  ,
+            "htm"         => "HTML"                  ,
+            'f'           => 'Fortran 77'            ,
+            'F'           => 'Fortran 77'            ,
+            'f77'         => 'Fortran 77'            ,
+            'F77'         => 'Fortran 77'            ,
+            'f90'         => 'Fortran 90'            ,
+            'f95'         => 'Fortran 95'            ,
+            'F90'         => 'Fortran 90'            ,
+            'F95'         => 'Fortran 95'            ,
+            "pfo"         => 'Fortran 77'            ,
+            'm'           => 'MATLAB'                ,
+            'p'           => 'Pascal'                ,
+            'pas'         => 'Pascal'                ,
+            'pp'          => 'Pascal'                ,
+            'dpr'         => 'Pascal'                ,
+            'pl'          => 'Perl'                  ,
+            'pm'          => 'Perl'                  ,
+            'perl'        => 'Perl'                  ,
+            'plx'         => 'Perl'                  ,
+            'plh'         => 'Perl'                  ,
+            'py'          => 'Python'                ,
+            'php'         => 'PHP'                   ,
+            'php3'        => 'PHP'                   ,
+            'php4'        => 'PHP'                   ,
+            'php5'        => 'PHP'                   ,
+            'php6'        => 'PHP'                   ,
+            'inc'         => 'inc'                   , # might be PHP
+            'asm'         => 'Assembler'             ,
+            's'           => 'Assembler'             ,
+            'S'           => 'Assembler'             ,
+            'sed'         => 'sed'                   ,
+            'sql'         => 'SQL'                   ,
+            'psql'        => 'SQL'                   ,
+            "xml"         => "XML"                   ,
+            "xsl"         => "XLS"                   ,
+            "xslt"        => "XLST"                  ,
+            "dtd"         => "DTD"                   ,
+            "xsd"         => "XSD"                   ,
+            "cfm"         => "ColdFusion"            ,
+            "focexec"     => "focus"                 ,
+            "adso"        => "adso"                  ,
+            "vba"         => "Visual Basic"          ,
+            "vb"          => "Visual Basic"          ,
+            "vbp"         => "Visual Basic"          ,
+            "bas"         => "Visual Basic"          ,
+            "vbw"         => "Visual Basic"          ,
+            "frm"         => "Visual Basic"          ,
+            "abap"        => "ABAP"                  ,
+            "fmt"         => "Oracle Forms"          ,
+            "rex"         => "Oracle Reports"        ,
+            "js"          => "Javascript"            ,
+            "jcl"         => "JCL"                   , # IBM Job Control Lang.
+            "aspx"        => "aspx"                  , # ASP.Net
+            "asax"        => "asax"                  , # ASP.Net
+            "ascx"        => "ascx"                  , # ASP.Net
+            "asmx"        => "asmx"                  , # ASP.Net
+            "resx"        => "resx"                  , # ASP.Net
+            "config"      => "config"                , # ASP.Net
+            "webinfo"     => "webinfo"               , # ASP.Net
+            "css"         => "css"                   ,
+            "asp"         => "asp"                   ,
+            "asa"         => "asa"                   ,
+            'sh'          => "Bourne Shell"          ,
+            'awk'         => 'awk'                   ,
+            'tcl'         => 'Tcl/Tk'                ,
+            'tk'          => 'Tcl/Tk'                ,
+            'itk'         => 'Tcl/Tk'                ,
+            'csh'         => 'C Shell'               ,
+            'tcsh'        => 'C Shell'               ,
+            'ksh'         => 'Korn Shell'            ,
+            'bash'        => 'Bourne Again Shell'    ,
+            'java'        => 'Java'                  ,
+            'el'          => 'Lisp'                  ,
+            'scm'         => 'Lisp'                  ,
+            'sc'          => 'Lisp'                  ,
+            'lsp'         => 'Lisp'                  ,
+            'cl'          => 'Lisp'                  ,
+            'jl'          => 'Lisp'                  ,
+            'exp'         => 'Expect'                ,
+            'makefile'    => 'Make'                  ,
+            'gnumakefile' => 'Make'                  ,
+            'y'           => 'yacc'                  ,
+            'l'           => 'lex'                   ,
+            "m3"          => "Modula3"               , 
+            "i3"          => "Modula3"               ,
+            "mg"          => "Modula3"               , 
+            "ig"          => "Modula3"               ,
+            "ml"          => "ML"                    , 
+            "mli"         => "ML"                    ,
+            "mly"         => "ML"                    , 
+            "mll"         => "ML"                    ,
+            "rb"          => "Ruby"                  ,
+            "hs"          => "Haskell"               , 
+            "lhs"         => "Haskell"               ,
+            "jsp"         => "JSP"                   , # Java server pages
+            );
+# 1}}}
+%{$rh_Language_by_Script} = ( # {{{1
+            'sh'       => 'Bourne Shell'          ,
+            'awk'      => 'awk'                   ,
+            'tcl'      => 'Tcl/Tk'                ,
+            'csh'      => 'C Shell'               ,
+            'tcsh'     => 'C Shell'               ,
+            'ksh'      => 'Korn Shell'            ,
+            'bash'     => 'Bourne Again Shell'    ,
+            'perl'     => 'Perl'                  ,
+            'perl5'    => 'Perl'                  ,
+            'octave'   => 'Octave'                ,
+            'make'     => 'Make'                  ,
+            );
+# 1}}}
+%{$rhaa_Filters_by_Language} = ( # {{{1
+    'ABAP'               => [   [ 'remove_matches'      , '^\*'    ], ],
+    'Ada'                => [   [ 'remove_matches'      , '^\s*--' ], ],
+    'ADSO'               => [   [ 'remove_matches'      , '^\s*\*[\+\!]' ], ],
+    'asm'                => [   [ 'get_from_SLOCCount'  , '^\s*\*[\+\!]' ], ],
+    'awk'                => [   [ 'remove_matches'      , '^\s*#'  ], ], 
+    'C'                  => [   [ 'remove_c_comments'   ,          ], ],
+    'C++'                => [   [ 'remove_c_comments'   ,          ], ],
+    'C/C++ Header'       => [   [ 'remove_c_comments'   ,          ], ],
+    'C#'                 => [   [ 'remove_c_comments'   ,          ], ],
+    'COBOL'              => [   [ 'remove_cobol_comments',          ], ],
+    'ColdFusion'         => [   [ 'remove_html_comments',          ], ],
+    'DTD'                => [   [ 'remove_html_comments',          ], ],
+    'Expect'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
+    'Focus'              => [   [ 'remove_matches'      , '^\s*\-\*'  ], ],
+    'Fortran 77'         => [   [ 'remove_f77_comments' ,          ], ],
+    'Fortran 90'         => [   [ 'remove_f77_comments' ,          ],
+                                [ 'remove_f90_comments' ,          ], ],
+    'Fortran 95'         => [   [ 'remove_f77_comments' ,          ],
+                                [ 'remove_f90_comments' ,          ], ],
+    'HTML'               => [   [ 'remove_html_comments',          ], ],
+    'Javascript'         => [   [ 'remove_c_comments'   ,          ], ],
+    'JCL'                => [   [ 'remove_jcl_comments' ,          ], ],
+    'MATLAB'             => [   [ 'remove_matches'      , '^\s*%'  ], ], 
+    'Perl'               => [   [ 'remove_below'        , '^__(END|DATA)__'],
+                                [ 'remove_matches'      , '^\s*#'  ], ], 
+    'Python'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
+    'PHP'                => [   [ 'remove_matches'      , '^\s*#'  ], ], 
+    'SQL'                => [   [ 'remove_matches'      , '^\s*--' ],
+                                [ 'remove_c_comments'   ,          ], ],
+    'sed'                => [   [ 'remove_matches'      , '^\s*#'  ], ], 
+    'Bourne Shell'       => [   [ 'remove_matches'      , '^\s*#'  ], ], 
+    'Tcl/Tk'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
+    'C Shell'            => [   [ 'remove_matches'      , '^\s*#'  ], ], 
+    'Korn Shell'         => [   [ 'remove_matches'      , '^\s*#'  ], ], 
+    'Bourne Again Shell' => [   [ 'remove_matches'      , '^\s*#'  ], ], 
+    'Octave'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
+    'Make'               => [   [ 'remove_matches'      , '^\s*#'  ], ], 
+    'Visual Basic'       => [   [ 'remove_matches'      , '^\s*\47'  ], ],  # \47 = octal for '
+    'Oracle Forms'       => [   [ 'remove_c_comments'   ,          ], ],
+    'Oracle Reports'     => [   [ 'remove_c_comments'   ,          ], ],
+    );
+# 1}}}
+%{$rh_Not_Code_Extensions} = ( # {{{1
+   "1"       => 1,  # Man pages (documentation):
+   "2"       => 1,
+   "3"       => 1,
+   "4"       => 1,
+   "5"       => 1,
+   "6"       => 1,
+   "7"       => 1,
+   "8"       => 1,
+   "9"       => 1,
+   "a"       => 1,  # Static object code.
+   "ad"      => 1,  # X application default resource file.
+   "afm"     => 1,  # font metrics
+   "am"      => 1,  # Debatable.
+   "arc"     => 1,  # arc(1) archive
+   "arj"     => 1,  # arj(1) archive
+   "au"      => 1,  # Audio sound filearj(1) archive
+   "bak"     => 1,  # Backup files - we only want to count the "real" files.
+   "bdf"     => 1,
+   "bmp"     => 1,
+   "bz2"     => 1,  # bzip2(1) compressed file
+   "csv"     => 1,  # comma separated values
+   "desktop" => 1,
+   "dic"     => 1,
+   "doc"     => 1,
+   "elc"     => 1,
+   "eps"     => 1,
+   "fig"     => 1,
+   "gif"     => 1,
+   "gz"      => 1,
+   "hdf"     => 1,  # hierarchical data format
+   "in"      => 1,  # Debatable.
+   "jpg"     => 1,
+   "kdelnk"  => 1,
+   "m4"      => 1,  # Debatable.
+   "man"     => 1,
+   "man"     => 1,
+   "mf"      => 1,
+   "mp3"     => 1,
+   "n"       => 1,
+   "o"       => 1,  # Object code is generated from source code.
+   "pbm"     => 1,
+   "pdf"     => 1,
+   "pfb"     => 1,
+   "png"     => 1,
+   "po"      => 1,
+   "ps"      => 1,  # Postscript is _USUALLY_ generated automatically.
+   "sgm"     => 1,
+   "sgml"    => 1,
+   "so"      => 1,  # Dynamically-loaded object code.
+   "Tag"     => 1,
+   "tex"     => 1,
+   "text"    => 1,
+   "tfm"     => 1,
+   "tgz"     => 1,  # gzipped tarball
+   "tiff"    => 1,
+   "txt"     => 1, 
+   "vf"      => 1,
+   "wav"     => 1,
+   "xbm"     => 1,
+   "xpm"     => 1,
+   "Y"       => 1,  # file compressed with "Yabba"
+   "Z"       => 1,  # file compressed with "compress"
+   "zip"     => 1,  # zip archive
+); # 1}}}
+%{$rh_Not_Code_Filename} = ( # {{{1
+   "README"      => 1,
+   "Readme"      => 1,
+   "readme"      => 1,
+   "README.tk"   => 1, # used in kdemultimedia, it's confusing.
+   "Changelog"   => 1,
+   "ChangeLog"   => 1,
+   "Repository"  => 1,
+   "CHANGES"     => 1,
+   "Changes"     => 1,
+   ".cvsignore"  => 1,
+   "Root"        => 1, # CVS
+   "BUGS"        => 1,
+   "TODO"        => 1,
+   "COPYING"     => 1,
+   "MAINTAINERS" => 1,
+   "Entries"     => 1,
+   "iconfig.h"   => 1, # Skip "iconfig.h" files; they're used in Imakefiles
+                       # (used in xlockmore):
+);
+# 1}}}
+%{$rh_Scale_Factor} = ( # {{{1
+    '1032/af'                      =>   5.00,
+    '1st generation default'       =>   0.25,
+    '2nd generation default'       =>   0.75,
+    '3rd generation default'       =>   1.00,
+    '4th generation default'       =>   4.00,
+    '5th generation default'       =>  16.00,
+    'aas macro'                    =>   0.88,
+    'abap/4'                       =>   5.00,
+    'ABAP'                         =>   5.00,
+    'accel'                        =>   4.21,
+    'access'                       =>   2.11,
+    'actor'                        =>   3.81,
+    'acumen'                       =>   2.86,
+    'Ada'                          =>   0.52,
+    'Ada 83'                       =>   1.13,
+    'Ada 95'                       =>   1.63,
+    'adr/dl'                       =>   2.00,
+    'adr/ideal/pdl'                =>   4.00,
+    'ads/batch'                    =>   4.00,
+    'ads/online'                   =>   4.00,
+'adso'                             =>   3.00,
+    'advantage'                    =>   2.11,
+    'ai shell default'             =>   1.63,
+    'ai shells'                    =>   1.63,
+    'algol 68'                     =>   0.75,
+    'algol w'                      =>   0.75,
+    'ambush'                       =>   2.50,
+    'aml'                          =>   1.63,
+    'amppl ii'                     =>   1.25,
+    'ansi basic'                   =>   1.25,
+    'ansi cobol 74'                =>   0.75,
+    'ansi cobol 85'                =>   0.88,
+    'SQL'                          =>   6.15,
+    'answer/db'                    =>   6.15,
+    'apl 360/370'                  =>   2.50,
+    'apl default'                  =>   2.50,
+    'apl*plus'                     =>   2.50,
+    'applesoft basic'              =>   0.63,
+    'application builder'          =>   4.00,
+    'application manager'          =>   2.22,
+    'aps'                          =>   0.96,
+    'aps'                          =>   4.71,
+    'apt'                          =>   1.13,
+    'aptools'                      =>   4.00,
+    'arc'                          =>   1.63,
+    'ariel'                        =>   0.75,
+    'arity'                        =>   1.63,
+    'arity prolog'                 =>   1.25,
+    'art'                          =>   1.63,
+    'art enterprise'               =>   1.74,
+    'artemis'                      =>   2.00,
+    'artim'                        =>   1.74,
+    'as/set'                       =>   4.21,
+    'asi/inquiry'                  =>   6.15,
+    'ask windows'                  =>   1.74,
+'asa'                         =>   1.29,
+'asp'                         =>   1.29,
+'aspx'                        =>   1.29,
+'resx'                        =>   1.29,
+'asax'                        =>   1.29,
+'ascx'                        =>   1.29,
+'asmx'                        =>   1.29,
+'config'                      =>   1.29,
+'webinfo'                     =>   1.29,
+'css'                         =>   5.33,
+
+#   'assembler (basic)'            =>   0.25,
+    'asm'                          =>   0.25,
+
+    'assembler (macro)'            =>   0.51,
+    'associative default'          =>   1.25,
+    'autocoder'                    =>   0.25,
+    'awk'                          =>   3.81,
+    'aztec c'                      =>   0.63,
+    'balm'                         =>   0.75,
+    'base sas'                     =>   1.51,
+    'basic'                        =>   0.75,
+    'basic a'                      =>   0.63,
+#   'basic assembly'               =>   0.25,
+    'berkeley pascal'              =>   0.88,
+    'better basic'                 =>   0.88,
+    'bliss'                        =>   0.75,
+    'bmsgen'                       =>   2.22,
+    'boeingcalc'                   =>  13.33,
+    'bteq'                         =>   6.15,
+
+    'C'                            =>   0.77,
+
+    'c set 2'                      =>   0.88,
+
+    'C#'                           =>   1.36,
+
+    'C++'                          =>   1.51,
+
+    'c86plus'                      =>   0.63,
+    'cadbfast'                     =>   2.00,
+    'caearl'                       =>   2.86,
+    'cast'                         =>   1.63,
+    'cbasic'                       =>   0.88,
+    'cdadl'                        =>   4.00,
+    'cellsim'                      =>   1.74,
+'ColdFusion'               =>   4.00,
+    'chili'                        =>   0.75,
+    'chill'                        =>   0.75,
+    'cics'                         =>   1.74,
+    'clarion'                      =>   1.38,
+    'clascal'                      =>   1.00,
+    'cli'                          =>   2.50,
+    'clipper'                      =>   2.05,
+    'clipper db'                   =>   2.00,
+    'clos'                         =>   3.81,
+    'clout'                        =>   2.00,
+    'cms2'                         =>   0.75,
+    'cmsgen'                       =>   4.21,
+    'COBOL'                        =>   1.04,
+    'COBOL ii'                     =>   0.75,
+    'COBOL/400'                    =>   0.88,
+    'cobra'                        =>   4.00,
+    'codecenter'                   =>   2.22,
+    'cofac'                        =>   2.22,
+    'cogen'                        =>   2.22,
+    'cognos'                       =>   2.22,
+    'cogo'                         =>   1.13,
+    'comal'                        =>   1.00,
+    'comit ii'                     =>   1.25,
+    'common lisp'                  =>   1.25,
+    'concurrent pascal'            =>   1.00,
+    'conniver'                     =>   1.25,
+    'cool:gen/ief'                 =>   2.58,
+    'coral 66'                     =>   0.75,
+    'corvet'                       =>   4.21,
+    'corvision'                    =>   5.33,
+    'cpl'                          =>   0.50,
+    'crystal reports'              =>   4.00,
+    'csl'                          =>   1.63,
+    'csp'                          =>   1.51,
+    'cssl'                         =>   1.74,
+    'culprit'                      =>   1.57,
+    'cxpert'                       =>   1.63,
+    'cygnet'                       =>   4.21,
+    'data base default'            =>   2.00,
+    'dataflex'                     =>   2.00,
+    'datatrieve'                   =>   4.00,
+    'dbase iii'                    =>   2.00,
+    'dbase iv'                     =>   1.54,
+    'dcl'                          =>   0.38,
+    'decision support default'     =>   2.22,
+    'decrally'                     =>   2.00,
+    'delphi'                       =>   2.76,
+    'dl/1'                         =>   2.00,
+    'dna4'                         =>   4.21,
+    'dos batch files'              =>   0.63,
+    'dsp assembly'                 =>   0.50,
+    'dtabl'                        =>   1.74,
+    'dtipt'                        =>   1.74,
+    'dyana'                        =>   1.13,
+    'dynamoiii'                    =>   1.74,
+    'easel'                        =>   2.76,
+    'easy'                         =>   1.63,
+    'easytrieve+'                  =>   2.35,
+    'eclipse'                      =>   1.63,
+    'eda/sql'                      =>   6.67,
+    'edscheme 3.4'                 =>   1.51,
+    'eiffel'                       =>   3.81,
+    'enform'                       =>   1.74,
+    'englishbased default'         =>   1.51,
+    'ensemble'                     =>   2.76,
+    'epos'                         =>   4.00,
+    'erlang'                       =>   2.00,
+    'esf'                          =>   2.00,
+    'espadvisor'                   =>   1.63,
+    'espl/i'                       =>   1.13,
+    'euclid'                       =>   0.75,
+    'excel'                        =>   1.74,
+    'excel 12'                     =>  13.33,
+    'excel 34'                     =>  13.33,
+    'excel 5'                      =>  13.33,
+    'express'                      =>   2.22,
+    'exsys'                        =>   1.63,
+    'extended common lisp'         =>   1.43,
+    'eznomad'                      =>   2.22,
+    'facets'                       =>   4.00,
+    'factorylink iv'               =>   2.76,
+    'fame'                         =>   2.22,
+    'filemaker pro'                =>   2.22,
+    'flavors'                      =>   2.76,
+    'flex'                         =>   1.74,
+    'flexgen'                      =>   2.76,
+    'focus'                        =>   1.90,
+    'foil'                         =>   1.51,
+    'forte'                        =>   4.44,
+    'forth'                        =>   1.25,
+    'Fortran 66'                   =>   0.63,
+    'Fortran 77'                   =>   0.75,
+    'Fortran 90'                   =>   1.00,
+    'Fortran 95'                   =>   1.13,
+    'Fortran II'                   =>   0.63,
+    'foundation'                   =>   2.76,
+    'foxpro'                       =>   2.29,
+    'foxpro 1'                     =>   2.00,
+    'foxpro 2.5'                   =>   2.35,
+    'framework'                    =>  13.33,
+    'g2'                           =>   1.63,
+    'gamma'                        =>   5.00,
+    'genascript'                   =>   2.96,
+    'gener/ol'                     =>   6.15,
+    'genexus'                      =>   5.33,
+    'genifer'                      =>   4.21,
+    'geode 2.0'                    =>   5.00,
+    'gfa basic'                    =>   2.35,
+    'gml'                          =>   1.74,
+    'golden common lisp'           =>   1.25,
+    'gpss'                         =>   1.74,
+    'guest'                        =>   2.86,
+    'guru'                         =>   1.63,
+    'gw basic'                     =>   0.82,
+    'haskell'                      =>   2.11,
+    'high c'                       =>   0.63,
+    'hlevel'                       =>   1.38,
+    'hp basic'                     =>   0.63,
+
+'HTML'     => 1.90 ,
+'XML'      => 1.90 ,
+'XSL'      => 1.90 ,
+'XSLT'     => 1.90 ,
+'DTD'      => 1.90 ,
+'XSD'      => 1.90 ,
+
+    'HTML 2'                       =>   5.00,
+    'HTML 3'                       =>   5.33,
+    'huron'                        =>   5.00,
+    'ibm adf i'                    =>   4.00,
+    'ibm adf ii'                   =>   4.44,
+    'ibm advanced basic'           =>   0.82,
+    'ibm cics/vs'                  =>   2.00,
+    'ibm compiled basic'           =>   0.88,
+    'ibm vs cobol'                 =>   0.75,
+    'ibm vs cobol ii'              =>   0.88,
+    'ices'                         =>   1.13,
+    'icon'                         =>   1.00,
+    'ideal'                        =>   1.54,
+    'idms'                         =>   2.00,
+    'ief'                          =>   5.71,
+    'ief/cool:gen'                 =>   2.58,
+    'iew'                          =>   5.71,
+    'ifps/plus'                    =>   2.50,
+    'imprs'                        =>   2.00,
+    'informix'                     =>   2.58,
+    'ingres'                       =>   2.00,
+    'inquire'                      =>   6.15,
+    'insight2'                     =>   1.63,
+    'install/1'                    =>   5.00,
+    'intellect'                    =>   1.51,
+    'interlisp'                    =>   1.38,
+    'interpreted basic'            =>   0.75,
+    'interpreted c'                =>   0.63,
+    'iqlisp'                       =>   1.38,
+    'iqrp'                         =>   6.15,
+    'j2ee'                         =>   1.60,
+    'janus'                        =>   1.13,
+    'Java'                         =>   1.36,
+'Javascript'                   =>   1.48,
+    'JCL'                          =>   1.67,
+    'joss'                         =>   0.75,
+    'jovial'                       =>   0.75,
+    'jsp'                          =>   1.36,
+    'kappa'                        =>   2.00,
+    'kbms'                         =>   1.63,
+    'kcl'                          =>   1.25,
+    'kee'                          =>   1.63,
+    'keyplus'                      =>   2.00,
+    'kl'                           =>   1.25,
+    'klo'                          =>   1.25,
+    'knowol'                       =>   1.63,
+    'krl'                          =>   1.38,
+    'Korn Shell'                   =>   3.81,
+    'ladder logic'                 =>   2.22,
+    'lambit/l'                     =>   1.25,
+    'lattice c'                    =>   0.63,
+    'liana'                        =>   0.63,
+    'lilith'                       =>   1.13,
+    'linc ii'                      =>   5.71,
+    'Lisp'                         =>   1.25,
+    'loglisp'                      =>   1.38,
+    'loops'                        =>   3.81,
+    'lotus 123 dos'                =>  13.33,
+    'lotus macros'                 =>   0.75,
+    'lotus notes'                  =>   3.64,
+    'lucid 3d'                     =>  13.33,
+    'lyric'                        =>   1.51,
+    'm'                            =>   5.00,
+    'macforth'                     =>   1.25,
+    'mach1'                        =>   2.00,
+    'machine language'             =>   0.13,
+    'maestro'                      =>   5.00,
+    'magec'                        =>   5.00,
+    'magik'                        =>   3.81,
+    'Lake'                         =>   3.81,
+    'mantis'                       =>   2.96,
+    'mapper'                       =>   0.99,
+    'mark iv'                      =>   2.00,
+    'mark v'                       =>   2.22,
+    'mathcad'                      =>  16.00,
+    'mdl'                          =>   2.22,
+    'mentor'                       =>   1.51,
+    'mesa'                         =>   0.75,
+    'microfocus cobol'             =>   1.00,
+    'microforth'                   =>   1.25,
+    'microsoft c'                  =>   0.63,
+    'microstep'                    =>   4.00,
+    'miranda'                      =>   2.00,
+    'model 204'                    =>   2.11,
+    'modula 2'                     =>   1.00,
+    'mosaic'                       =>  13.33,
+    # 'ms c ++ v. 7'                 =>   1.51,
+    'ms compiled basic'            =>   0.88,
+    'msl'                          =>   1.25,
+    'mulisp'                       =>   1.25,
+    'mumps'                        =>   4.21,
+    'Nastran'                      =>   1.13,
+    'natural'                      =>   1.54,
+    'natural 1'                    =>   1.51,
+    'natural 2'                    =>   1.74,
+    'natural construct'            =>   3.20,
+    'natural language'             =>   0.03,
+    'netron/cap'                   =>   4.21,
+    'nexpert'                      =>   1.63,
+    'nial'                         =>   1.63,
+    'nomad2'                       =>   2.00,
+    'nonprocedural default'        =>   2.22,
+    'notes vip'                    =>   2.22,
+    'nroff'                        =>   1.51,
+    'object assembler'             =>   1.25,
+    'object lisp'                  =>   2.76,
+    'object logo'                  =>   2.76,
+    'object pascal'                =>   2.76,
+    'object star'                  =>   5.00,
+    'objectivec'                   =>   2.96,
+    'objectoriented default'       =>   2.76,
+    'objectview'                   =>   3.20,
+    'ogl'                          =>   1.00,
+    'omnis 7'                      =>   2.00,
+    'oodl'                         =>   2.76,
+    'ops'                          =>   1.74,
+    'ops5'                         =>   1.38,
+    'oracle'                       =>   2.76,
+'Oracle Reports'  =>   2.76,
+'Oracle Forms'    =>   2.67,
+    'Oracle Developer/2000'        =>   3.48,
+    'oscar'                        =>   0.75,
+    'pacbase'                      =>   1.67,
+    'pace'                         =>   2.00,
+    'paradox/pal'                  =>   2.22,
+    'pascal'                       =>   0.88,
+    'pc focus'                     =>   2.22,
+    'pdl millenium'                =>   3.81,
+    'pdp11 ade'                    =>   1.51,
+    'peoplesoft'                   =>   2.50,
+
+    'Perl'                         =>   4.00,
+
+    'persistance object builder'   =>   3.81,
+    'pilot'                        =>   1.51,
+    'pl/1'                         =>   1.38,
+    'pl/m'                         =>   1.13,
+    'pl/s'                         =>   0.88,
+    'pl/sql'                       =>   2.58,
+    'planit'                       =>   1.51,
+    'planner'                      =>   1.25,
+    'planperfect 1'                =>  11.43,
+    'plato'                        =>   1.51,
+    'polyforth'                    =>   1.25,
+    'pop'                          =>   1.38,
+    'poplog'                       =>   1.38,
+    'power basic'                  =>   1.63,
+    'powerbuilder'                 =>   3.33,
+    'powerhouse'                   =>   5.71,
+    'ppl (plus)'                   =>   2.00,
+    'problemoriented default'      =>   1.13,
+    'proc'                         =>   2.96,
+    'procedural default'           =>   0.75,
+    'professional pascal'          =>   0.88,
+    'program generator default'    =>   5.00,
+    'progress v4'                  =>   2.22,
+    'proiv'                        =>   1.38,
+    'prolog'                       =>   1.25,
+    'prose'                        =>   0.75,
+    'proteus'                      =>   0.75,
+    'qbasic'                       =>   1.38,
+    'qbe'                          =>   6.15,
+    'qmf'                          =>   5.33,
+    'qnial'                        =>   1.63,
+    'quattro'                      =>  13.33,
+    'quattro pro'                  =>  13.33,
+    'query default'                =>   6.15,
+    'quick basic 1'                =>   1.25,
+    'quick basic 2'                =>   1.31,
+    'quick basic 3'                =>   1.38,
+    'quick c'                      =>   0.63,
+    'quickbuild'                   =>   2.86,
+    'quiz'                         =>   5.33,
+    'rally'                        =>   2.00,
+    'ramis ii'                     =>   2.00,
+    'rapidgen'                     =>   2.86,
+    'ratfor'                       =>   0.88,
+    'rdb'                          =>   2.00,
+    'realia'                       =>   1.74,
+    'realizer 1.0'                 =>   2.00,
+    'realizer 2.0'                 =>   2.22,
+    'relate/3000'                  =>   2.00,
+    'reuse default'                =>  16.00,
+    'Rexx'                         =>   1.19,
+    'Rexx (mvs)'                   =>   1.00,
+    'Rexx (os/2)'                  =>   1.74,
+    'rm basic'                     =>   0.88,
+    'rm cobol'                     =>   0.75,
+    'rm fortran'                   =>   0.75,
+    'rpg i'                        =>   1.00,
+    'rpg ii'                       =>   1.63,
+    'rpg iii'                      =>   1.63,
+    'rtexpert 1.4'                 =>   1.38,
+    'sabretalk'                    =>   0.90,
+    'sail'                         =>   0.75,
+    'sapiens'                      =>   5.00,
+    'sas'                          =>   1.95,
+    'savvy'                        =>   6.15,
+    'sbasic'                       =>   0.88,
+    'sceptre'                      =>   1.13,
+    'scheme'                       =>   1.51,
+    'screen painter default'       =>  13.33,
+    'sequal'                       =>   6.67,
+      'Bourne Shell'               =>   3.81,
+      'ksh'                        =>   3.81,
+      'Bourne Again Shell'         =>   3.81,
+      'C Shell'                    =>   3.81,
+      'C Shell'                    =>   3.81,
+    'siebel tools '                =>   6.15,
+    'simplan'                      =>   2.22,
+    'simscript'                    =>   1.74,
+    'simula'                       =>   1.74,
+    'simula 67'                    =>   1.74,
+    'simulation default'           =>   1.74,
+    'slogan'                       =>   0.98,
+    'smalltalk'                    =>   2.50,
+    'smalltalk 286'                =>   3.81,
+    'smalltalk 80'                 =>   3.81,
+    'smalltalk/v'                  =>   3.81,
+    'snap'                         =>   1.00,
+    'snobol24'                     =>   0.63,
+    'softscreen'                   =>   5.71,
+    'solo'                         =>   1.38,
+    'speakeasy'                    =>   2.22,
+    'spinnaker ppl'                =>   2.22,
+    'splus'                        =>   2.50,
+    'spreadsheet default'          =>  13.33,
+    'sps'                          =>   0.25,
+    'spss'                         =>   2.50,
+    'SQL'                          =>   2.29,
+    'sqlwindows'                   =>   6.67,
+    'statistical default'          =>   2.50,
+    'strategem'                    =>   2.22,
+    'stress'                       =>   1.13,
+    'strongly typed default'       =>   0.88,
+    'style'                        =>   1.74,
+    'superbase 1.3'                =>   2.22,
+    'surpass'                      =>  13.33,
+    'sybase'                       =>   2.00,
+    'symantec c++'                 =>   2.76,
+    'symbolang'                    =>   1.25,
+    'synchroworks'                 =>   4.44,
+    'synon/2e'                     =>   4.21,
+    'systemw'                      =>   2.22,
+    'tandem access language'       =>   0.88,
+    'Tcl/Tk'                       =>   1.25,
+    'telon'                        =>   5.00,
+    'tessaract'                    =>   2.00,
+    'the twin'                     =>  13.33,
+    'themis'                       =>   6.15,
+    'tiief'                        =>   5.71,
+    'topspeed c++'                 =>   2.76,
+    'transform'                    =>   5.33,
+    'translisp plus'               =>   1.43,
+    'treet'                        =>   1.25,
+    'treetran'                     =>   1.25,
+    'trs80 basic'                  =>   0.63,
+    'true basic'                   =>   1.25,
+    'turbo c'                      =>   0.63,
+    # 'turbo c++'                    =>   1.51,
+    'turbo expert'                 =>   1.63,
+    'turbo pascal >5'              =>   1.63,
+    'turbo pascal 14'              =>   1.00,
+    'turbo pascal 45'              =>   1.13,
+    'turbo prolog'                 =>   1.00,
+    'turing'                       =>   1.00,
+    'tutor'                        =>   1.51,
+    'twaice'                       =>   1.63,
+    'ucsd pascal'                  =>   0.88,
+    'ufo/ims'                      =>   2.22,
+    'uhelp'                        =>   2.50,
+    'uniface'                      =>   5.00,
+    # 'unix shell scripts'           =>   3.81,
+    'vax acms'                     =>   1.38,
+    'vax ade'                      =>   2.00,
+    'vbscript'                     =>   2.35,
+    'vectran'                      =>   0.75,
+    'vhdl '                        =>   4.21,
+    'visible c'                    =>   1.63,
+    'visible cobol'                =>   2.00,
+    'visicalc 1'                   =>   8.89,
+    'visual 4.0'                   =>   2.76,
+    'visual basic'                 =>   1.90,
+    'visual basic 1'               =>   1.74,
+    'visual basic 2'               =>   1.86,
+    'visual basic 3'               =>   2.00,
+    'visual basic 4'               =>   2.22,
+    'visual basic 5'               =>   2.76,
+'Visual Basic'               =>   2.76,
+    'visual basic dos'             =>   2.00,
+    'visual c++'                   =>   2.35,
+    'visual cobol'                 =>   4.00,
+    'visual objects'               =>   5.00,
+    'visualage'                    =>   3.81,
+    'visualgen'                    =>   4.44,
+    'vpf'                          =>   0.84,
+    'vsrexx'                       =>   2.50,
+    'vulcan'                       =>   1.25,
+    'vz programmer'                =>   2.22,
+    'warp x'                       =>   2.00,
+    'watcom c'                     =>   0.63,
+    'watcom c/386'                 =>   0.63,
+    'waterloo c'                   =>   0.63,
+    'waterloo pascal'              =>   0.88,
+    'watfiv'                       =>   0.94,
+    'watfor'                       =>   0.88,
+    'web scripts'                  =>   5.33,
+    'whip'                         =>   0.88,
+    'wizard'                       =>   2.86,
+    'xlisp'                        =>   1.25,
+    'yacc'                         =>   1.51,
+    'yacc++'                       =>   1.51,
+    'zbasic'                       =>   0.88,
+    'zim'                          =>   4.21,
+    'zlisp'                        =>   1.25,
+
+'Expect'  => 2.00,
+'C/C++ Header'  => 1.00, 
+'inc'     => 1.00,
+'lex'     => 1.00,
+'MATLAB'  => 4.00,
+'ML'      => 3.00,
+'Modula3' => 2.00,
+'PHP'     => 3.50,
+'Python'  => 4.20,
+'Ruby'    => 4.20,
+'sed'     => 4.00,
+);
+# 1}}}
+} # end of sub set_constants()
+
+# subroutines copied from SLOCCount
+my %lex_files = ();     # really_is_lex()
+my %expect_files = ();  # really_is_expect()
+my %pascal_files = ();  # really_is_pascal(), really_is_incpascal()
+my %php_files = ();     # really_is_php()
+sub really_is_lex { # {{{1
+# Given filename, returns TRUE if its contents really is lex.
+# lex file must have "%%", "%{", and "%}".
+# In theory, a lex file doesn't need "%{" and "%}", but in practice
+# they all have them, and requiring them avoid mislabeling a
+# non-lexfile as a lex file.
+
+ my $filename = shift;
+ chomp($filename);
+
+ my $is_lex = 0;      # Value to determine.
+ my $percent_percent = 0;
+ my $percent_opencurly = 0;
+ my $percent_closecurly = 0;
+
+ # Return cached result, if available:
+ if ($lex_files{$filename}) { return $lex_files{$filename};}
+
+ open(LEX_FILE, "<$filename") ||
+      die "Can't open $filename to determine if it's lex.\n";
+ while(<LEX_FILE>) {
+   $percent_percent++     if (m/^\s*\%\%/);
+   $percent_opencurly++   if (m/^\s*\%\{/);
+   $percent_closecurly++   if (m/^\s*\%\}/);
+ }
+ close(LEX_FILE);
+
+ if ($percent_percent && $percent_opencurly && $percent_closecurly)
+          {$is_lex = 1;}
+
+ $lex_files{$filename} = $is_lex; # Store result in cache.
+
+ return $is_lex;
+} # 1}}}
+sub really_is_expect { # {{{1
+# Given filename, returns TRUE if its contents really are Expect.
+# Many "exp" files (such as in Apache and Mesa) are just "export" data,
+# summarizing something else # (e.g., its interface).
+# Sometimes (like in RPM) it's just misc. data.
+# Thus, we need to look at the file to determine
+# if it's really an "expect" file.
+
+ my $filename = shift;
+ chomp($filename);
+
+# The heuristic is as follows: it's Expect _IF_ it:
+# 1. has "load_lib" command and either "#" comments or {}.
+# 2. {, }, and one of: proc, if, [...], expect
+
+ my $is_expect = 0;      # Value to determine.
+
+ my $begin_brace = 0;  # Lines that begin with curly braces.
+ my $end_brace = 0;    # Lines that begin with curly braces.
+ my $load_lib = 0;     # Lines with the Load_lib command.
+ my $found_proc = 0;
+ my $found_if = 0;
+ my $found_brackets = 0;
+ my $found_expect = 0;
+ my $found_pound = 0;
+
+ # Return cached result, if available:
+ if ($expect_files{$filename}) { return expect_files{$filename};}
+
+ open(EXPECT_FILE, "<$filename") ||
+      die "Can't open $filename to determine if it's expect.\n";
+ while(<EXPECT_FILE>) {
+
+   if (m/#/) {$found_pound++; s/#.*//;}
+   if (m/^\s*\{/) { $begin_brace++;}
+   if (m/\{\s*$/) { $begin_brace++;}
+   if (m/^\s*\}/) { $end_brace++;}
+   if (m/\};?\s*$/) { $end_brace++;}
+   if (m/^\s*load_lib\s+\S/) { $load_lib++;}
+   if (m/^\s*proc\s/) { $found_proc++;}
+   if (m/^\s*if\s/) { $found_if++;}
+   if (m/\[.*\]/) { $found_brackets++;}
+   if (m/^\s*expect\s/) { $found_expect++;}
+ }
+ close(EXPECT_FILE);
+
+ if ($load_lib && ($found_pound || ($begin_brace && $end_brace)))
+          {$is_expect = 1;}
+ if ( $begin_brace && $end_brace &&
+      ($found_proc || $found_if || $found_brackets || $found_expect))
+          {$is_expect = 1;}
+
+ $expect_files{$filename} = $is_expect; # Store result in cache.
+
+ return $is_expect;
+} # 1}}}
+sub really_is_pascal { # {{{1
+# Given filename, returns TRUE if its contents really are Pascal.
+
+# This isn't as obvious as it seems.
+# Many ".p" files are Perl files
+# (such as /usr/src/redhat/BUILD/ispell-3.1/dicts/czech/glob.p),
+# others are C extractions
+# (such as /usr/src/redhat/BUILD/linux/include/linux/umsdos_fs.p
+# and some files in linuxconf).
+# However, test files in "p2c" really are Pascal, for example.
+
+# Note that /usr/src/redhat/BUILD/ucd-snmp-4.1.1/ov/bitmaps/UCD.20.p
+# is actually C code.  The heuristics determine that they're not Pascal,
+# but because it ends in ".p" it's not counted as C code either.
+# I believe this is actually correct behavior, because frankly it
+# looks like it's automatically generated (it's a bitmap expressed as code).
+# Rather than guess otherwise, we don't include it in a list of
+# source files.  Let's face it, someone who creates C files ending in ".p"
+# and expects them to be counted by default as C files in SLOCCount needs
+# their head examined.  I suggest examining their head
+# with a sucker rod (see syslogd(8) for more on sucker rods).
+
+# This heuristic counts as Pascal such files such as:
+#  /usr/src/redhat/BUILD/teTeX-1.0/texk/web2c/tangleboot.p
+# Which is hand-generated.  We don't count woven documents now anyway,
+# so this is justifiable.
+
+ my $filename = shift;
+ chomp($filename);
+
+# The heuristic is as follows: it's Pascal _IF_ it has all of the following
+# (ignoring {...} and (*...*) comments):
+# 1. "^..program NAME" or "^..unit NAME",
+# 2. "procedure", "function", "^..interface", or "^..implementation",
+# 3. a "begin", and
+# 4. it ends with "end.",
+#
+# Or it has all of the following:
+# 1. "^..module NAME" and
+# 2. it ends with "end.".
+#
+# Or it has all of the following:
+# 1. "^..program NAME",
+# 2. a "begin", and
+# 3. it ends with "end.".
+#
+# The "end." requirements in particular filter out non-Pascal.
+#
+# Note (jgb): this does not detect Pascal main files in fpc, like
+# fpc-1.0.4/api/test/testterminfo.pas, which does not have "program" in
+# it
+
+ my $is_pascal = 0;      # Value to determine.
+
+ my $has_program = 0;
+ my $has_unit = 0;
+ my $has_module = 0;
+ my $has_procedure_or_function = 0;
+ my $found_begin = 0;
+ my $found_terminating_end = 0;
+ my $has_begin = 0;
+
+ # Return cached result, if available:
+ if ($pascal_files{$filename}) { return pascal_files{$filename};}
+
+ open(PASCAL_FILE, "<$filename") ||
+      die "Can't open $filename to determine if it's pascal.\n";
+ while(<PASCAL_FILE>) {
+   s/\{.*?\}//g;  # Ignore {...} comments on this line; imperfect, but effective.
+   s/\(\*.*?\*\)//g;  # Ignore (*...*) comments on this line; imperfect, but effective.
+   if (m/\bprogram\s+[A-Za-z]/i)  {$has_program=1;}
+   if (m/\bunit\s+[A-Za-z]/i)     {$has_unit=1;}
+   if (m/\bmodule\s+[A-Za-z]/i)   {$has_module=1;}
+   if (m/\bprocedure\b/i)         { $has_procedure_or_function = 1; }
+   if (m/\bfunction\b/i)          { $has_procedure_or_function = 1; }
+   if (m/^\s*interface\s+/i)      { $has_procedure_or_function = 1; }
+   if (m/^\s*implementation\s+/i) { $has_procedure_or_function = 1; }
+   if (m/\bbegin\b/i) { $has_begin = 1; }
+   # Originally I said:
+   # "This heuristic fails if there are multi-line comments after
+   # "end."; I haven't seen that in real Pascal programs:"
+   # But jgb found there are a good quantity of them in Debian, specially in 
+   # fpc (at the end of a lot of files there is a multiline comment
+   # with the changelog for the file).
+   # Therefore, assume Pascal if "end." appears anywhere in the file.
+   if (m/end\.\s*$/i) {$found_terminating_end = 1;}
+#   elsif (m/\S/) {$found_terminating_end = 0;}
+ }
+ close(PASCAL_FILE);
+
+ # Okay, we've examined the entire file looking for clues;
+ # let's use those clues to determine if it's really Pascal:
+
+ if ( ( ($has_unit || $has_program) && $has_procedure_or_function &&
+     $has_begin && $found_terminating_end ) ||
+      ( $has_module && $found_terminating_end ) ||
+      ( $has_program && $has_begin && $found_terminating_end ) )
+          {$is_pascal = 1;}
+
+ $pascal_files{$filename} = $is_pascal; # Store result in cache.
+
+ return $is_pascal;
+} # 1}}}
+sub really_is_incpascal { # {{{1
+# Given filename, returns TRUE if its contents really are Pascal.
+# For .inc files (mainly seen in fpc)
+
+ my $filename = shift;
+ chomp($filename);
+
+# The heuristic is as follows: it is Pacal if any of the following:
+# 1. really_is_pascal returns true
+# 2. Any usual reserverd word is found (program, unit, const, begin...)
+
+ # If the general routine for Pascal files works, we have it
+ if (&really_is_pascal ($filename)) { 
+   $pascal_files{$filename} = 1;
+   return 1;
+ }
+
+ my $is_pascal = 0;      # Value to determine.
+ my $found_begin = 0;
+
+ open(PASCAL_FILE, "<$filename") ||
+      die "Can't open $filename to determine if it's pascal.\n";
+ while(<PASCAL_FILE>) {
+   s/\{.*?\}//g;  # Ignore {...} comments on this line; imperfect, but effective.
+   s/\(\*.*?\*\)//g;  # Ignore (*...*) comments on this line; imperfect, but effective.
+   if (m/\bprogram\s+[A-Za-z]/i)  {$is_pascal=1;}
+   if (m/\bunit\s+[A-Za-z]/i)     {$is_pascal=1;}
+   if (m/\bmodule\s+[A-Za-z]/i)   {$is_pascal=1;}
+   if (m/\bprocedure\b/i)         {$is_pascal = 1; }
+   if (m/\bfunction\b/i)          {$is_pascal = 1; }
+   if (m/^\s*interface\s+/i)      {$is_pascal = 1; }
+   if (m/^\s*implementation\s+/i) {$is_pascal = 1; }
+   if (m/\bconstant\s+/i)         {$is_pascal=1;}
+   if (m/\bbegin\b/i) { $found_begin = 1; }
+   if ((m/end\.\s*$/i) && ($found_begin = 1)) {$is_pascal = 1;}
+   if ($is_pascal) {
+     last;
+   }
+ }
+
+ close(PASCAL_FILE);
+ $pascal_files{$filename} = $is_pascal; # Store result in cache.
+ return $is_pascal;
+} # 1}}}
+sub really_is_php { # {{{1
+# Given filename, returns TRUE if its contents really is php.
+
+ my $filename = shift;
+ chomp($filename);
+
+ my $is_php = 0;      # Value to determine.
+ # Need to find a matching pair of surrounds, with ending after beginning:
+ my $normal_surround = 0;  # <?; bit 0 = <?, bit 1 = ?>
+ my $script_surround = 0;  # <script..>; bit 0 = <script language="php">
+ my $asp_surround = 0;     # <%; bit 0 = <%, bit 1 = %>
+
+ # Return cached result, if available:
+ if ($php_files{$filename}) { return $php_files{$filename};}
+
+ open(PHP_FILE, "<$filename") ||
+      die "Can't open $filename to determine if it's php.\n";
+ while(<PHP_FILE>) {
+   if (m/\<\?/)                           { $normal_surround |= 1; }
+   if (m/\?\>/ && ($normal_surround & 1)) { $normal_surround |= 2; }
+   if (m/\<script.*language="?php"?/i)    { $script_surround |= 1; }
+   if (m/\<\/script\>/i && ($script_surround & 1)) { $script_surround |= 2; }
+   if (m/\<\%/)                           { $asp_surround |= 1; }
+   if (m/\%\>/ && ($asp_surround & 1)) { $asp_surround |= 2; }
+ }
+ close(PHP_FILE);
+
+ if ( ($normal_surround == 3) || ($script_surround == 3) ||
+      ($asp_surround == 3)) {
+   $is_php = 1;
+ }
+
+ $php_files{$filename} = $is_php; # Store result in cache.
+
+ return $is_php;
+} # 1}}}
+__END__
+mode values (stat $item)[2]
+       Unix    Windows
+file:  33188   33206
+dir :  16832   16895
+link:  33261   33206
+pipe:   4544    null
