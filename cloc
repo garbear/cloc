@@ -1,4 +1,5 @@
 #!/usr/bin/env perl
+my $VERSION = 0.5;
  
 # cloc -- Count Lines of Code {{{1
 # Copyright (C) 2006 Northrop Grumman Corporation
@@ -57,22 +58,29 @@ Usage: $script [options] <file(s)/dir(s)>
                              given) languages and exit.
    --progress_rate=<n>       Show progress update after every <n> files are
                              processed (default <n>=1000).
+   --print_filter_stages     Print processed source code before and after each
+                             filter is applied.
+   --version                 Print the version of this program and exit.
+
 ";
 my ($keep_found, $keep_categorized, $keep_ignored, $keep_counted, 
-    $show_ext, $show_lang, $progress_rate, $opt_v,
+    $show_ext, $show_lang, $progress_rate, $print_filter_stages, $opt_v,
+    $opt_version,
     %Error_Codes, %Language_by_Extension, %Language_by_Script,
     %Filters_by_Language, %Not_Code_Extensions, %Not_Code_Filename,
     %Scale_Factor,
    );
 GetOptions(
-           "keep_found=s"        => \$keep_found       ,
-           "keep_categorized=s"  => \$keep_categorized ,
-           "keep_ignored=s"      => \$keep_ignored     ,
-           "keep_counted=s"      => \$keep_counted     ,
-           "show_ext:s"          => \$show_ext         ,
-           "show_lang:s"         => \$show_lang        ,
-           "progress_rate=i"     => \$progress_rate    ,
-           "v:i"                 => \$opt_v            ,
+           "keep_found=s"        => \$keep_found          ,
+           "keep_categorized=s"  => \$keep_categorized    ,
+           "keep_ignored=s"      => \$keep_ignored        ,
+           "keep_counted=s"      => \$keep_counted        ,
+           "show_ext:s"          => \$show_ext            ,
+           "show_lang:s"         => \$show_lang           ,
+           "progress_rate=i"     => \$progress_rate       ,
+           "v:i"                 => \$opt_v               ,
+           "print_filter_stages" => \$print_filter_stages ,
+           "version"             => \$opt_version         ,
           );
 # Options defaults:
 $progress_rate  = 1000 unless $progress_rate;
@@ -87,7 +95,7 @@ set_constants(               #        Sample values:
     \%Language_by_Extension, # Language_by_Extension{f}    = 'Fortran 77' 
     \%Language_by_Script   , # Language_by_Script{sh}      = 'Bourne Shell'
     \%Filters_by_Language  , # Filters_by_Language{Bourne Shell}[0] = 
-                             #      [ 'remove_matches' , '#'  ]
+                             #      [ 'remove_matches' , '^\s*#'  ]
     \%Not_Code_Extensions  , # Not_Code_Extensions{jpg}    = 1
     \%Not_Code_Filename    , # Not_Code_Filename{README}   = 1
     \%Scale_Factor         , # Scale_Factor{Perl}          = 4.0
@@ -175,14 +183,20 @@ if (@Errors) {
     printf "%d errors:\n", scalar @Errors;
     print Dumper(@Errors) if @Errors;
 }
-print_report(\%Results_by_Language, \%Scale_Factor);
+print_report($VERSION, \%Results_by_Language, \%Scale_Factor);
 
 sub print_report { # {{{1
-    my ($rhh_count, # in  count{language}{nFiles|code|blank|comment}
+    my ($version  , # in
+        $rhh_count, # in  count{language}{nFiles|code|blank|comment}
         $rh_scale , # in
        ) = @_;
 
-    printf "\n%-14s %9s %9s %9s %9s %8s   %14s\n",
+    my $URL   = "http://cloc.sourceforge.net";
+    my $eq    = "=" x 10;
+    my $title = sprintf "%s cloc version %5.2f %s %s %s", 
+                        $eq, $version, $eq, $URL, $eq;
+    printf "%s\n%-14s %9s %9s %9s %9s %8s   %14s\n",
+        $title          ,
         "Language"      ,
         "files"         ,
         "blank"         ,
@@ -324,7 +338,7 @@ die  "make_file_list($file) undef lang" unless defined $language;
         printf $fh "%d,%s,%s\n", $size_in_bytes, $language, $file;
         ++$nFiles_Categorized;
         printf "Categorized %8d files\r", 
-            $nFiles_Categorized unless $nFiles_Categorized %  500;
+            $nFiles_Categorized unless $nFiles_Categorized % $progress_rate;
     }
 
     return $fh;   # handle to the file containing the list of files to process
@@ -518,8 +532,10 @@ sub call_counter { # {{{1
 
     my $total_lines = scalar @lines;
 
+    print_lines($file, "Original file:",       \@lines) if $print_filter_stages;
     @lines = remove_matches(\@lines, '^\s*$'); # removes blank lines
     my $blank_lines = $total_lines - scalar @lines;
+    print_lines($file, "Blank lines removed:", \@lines) if $print_filter_stages;
 
     foreach my $call_string (@routines) {
 #print "call_counter:  call_string=", Dumper($call_string), "\n";
@@ -531,7 +547,11 @@ die "call_counter undefined subroutine $subroutine for $file\n"
         shift @args; # drop the subroutine name
         no strict 'refs';
         @lines = &{$subroutine}(\@lines, @args);   # apply filter...
+        print_lines($file, "After $subroutine(@args)", \@lines) 
+            if $print_filter_stages;
         @lines = remove_matches(\@lines, '^\s*$'); # ...then remove blank lines
+        print_lines($file, "post $subroutine(@args) blanks cleanup:", \@lines) 
+            if $print_filter_stages;
 #printf "call_counter after calling %s have %d lines of code [\n%s]\n",
 #$subroutine, scalar  @lines, join("\n", @lines);
     }
@@ -545,22 +565,13 @@ sub remove_c_comments { # {{{1
     my ($ra_lines, ) = @_;
 
     # http://search.cpan.org/~jhi/perl-5.8.0/pod/perlfaq6.pod#How_do_I_use_a_regular_expression_to_strip_C_style_comments_from_a_file%3F
-##  my $MARKER = ">>C COMMENT<<";
 
     print "-> remove_c_comments\n" if $opt_v > 2;
 
     my $all_lines = join("", @{$ra_lines});
 
-##  my $MARKER = ">>C COMMENT<<";  # simplifies counting of C comments
-
     no warnings;  # else "Use of uninitialized value in substitution iterator"
     $all_lines =~ s#/\*[^*]*\*+([^/*][^*]*\*+)*/|("(\\.|[^"\\])*"|'(\\.|[^'\\])*'|.[^/"'\\]*)#$2#gs;
-
-##  foreach (@no_comments) {
-##      ++$comment_count if m{^\s*$MARKER$MARKER\s*$}  or #  /* xxx */
-##                          m{^\s*$MARKER/$MARKER/};      #  // xxx
-##      ++$blank_count   if m{^\s*$};
-##  }
 
     print "<- remove_c_comments\n" if $opt_v > 2;
     return split("\n", $all_lines);
@@ -684,7 +695,17 @@ sub remove_jcl_comments { # {{{1
     print "<- remove_jcl_comments\n" if $opt_v > 2;
     return @save_lines;
 } # 1}}}
-
+sub print_lines { # {{{1
+    my ($file     , # in
+        $title    , # in
+        $ra_lines , # in
+       ) = @_;
+    printf "->%-30s %s\n", $file, $title;
+    for (my $i = 0; $i < scalar @{$ra_lines}; $i++) {
+        printf "%5d | %s", $i+1, $ra_lines->[$i];
+        print "\n" unless $ra_lines->[$i] =~ m{\n$}
+    }
+} # 1}}}
 sub set_constants { # $rh_Error_Codes  {{{1
     my ($rh_Error_Codes           , # out
         $rh_Language_by_Extension , # out
@@ -840,10 +861,12 @@ sub set_constants { # $rh_Error_Codes  {{{1
     'asm'                => [   [ 'get_from_SLOCCount'  , '^\s*\*[\+\!]' ], ],
     'awk'                => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'C'                  => [   [ 'remove_c_comments'   ,          ], ],
-    'C++'                => [   [ 'remove_c_comments'   ,          ], ],
+    'C++'                => [   [ 'remove_c_comments'   ,          ],
+                                [ 'remove_matches'      , '^\s*//' ], ],
     'C/C++ Header'       => [   [ 'remove_c_comments'   ,          ], ],
-    'C#'                 => [   [ 'remove_c_comments'   ,          ], ],
-    'COBOL'              => [   [ 'remove_cobol_comments',          ], ],
+    'C#'                 => [   [ 'remove_c_comments'   ,          ],
+                                [ 'remove_matches'      , '^\s*//' ], ],
+    'COBOL'              => [   [ 'remove_cobol_comments',         ], ],
     'ColdFusion'         => [   [ 'remove_html_comments',          ], ],
     'DTD'                => [   [ 'remove_html_comments',          ], ],
     'Expect'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
@@ -1316,7 +1339,7 @@ sub set_constants { # $rh_Error_Codes  {{{1
     'pacbase'                      =>   1.67,
     'pace'                         =>   2.00,
     'paradox/pal'                  =>   2.22,
-    'pascal'                       =>   0.88,
+    'Pascal'                       =>   0.88,
     'pc focus'                     =>   2.22,
     'pdl millenium'                =>   3.81,
     'pdp11 ade'                    =>   1.51,
