@@ -5,8 +5,13 @@ my $VERSION = 0.5;
 # Copyright (C) 2006 Northrop Grumman Corporation
 # Author:  Al Danial <al.danial@gmail.com>
 #
-# Includes code from SLOCCount http://www.dwheeler.com/sloccount/
-# by David Wheeler.
+# Includes code from:
+#   - SLOCCount v2.26 
+#     http://www.dwheeler.com/sloccount/
+#     by David Wheeler.
+#   - Regexp::Common v2.120
+#     http://search.cpan.org/~abigail/Regexp-Common-2.120/lib/Regexp/Common.pm
+#     by Damian Conway and Abigail
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -28,17 +33,15 @@ use warnings;
 use strict;
 use Getopt::Long;
 use File::Basename;
-use File::Temp qw { tempfile };
+use File::Temp qw { tempfile tempdir };
 use File::Find;
 use IO::File;
 use Digest::MD5;
 #use Data::Dumper::Simple;
-#
-# Albert Danial     July 31 2006
-#
-$| = 1;  # flush stdout
-my $nFiles_Found = 0;
 
+$| = 1;  # flush stdout
+
+# Usage information {{{1
 my $script = basename $0;
 my $usage  = "
 Usage: $script [options] <file(s)/dir(s)>
@@ -86,10 +89,13 @@ GetOptions(
 $progress_rate  = 1000 unless $progress_rate;
 $opt_v          =    0 unless $opt_v;
 die $usage unless defined $show_lang or defined $show_ext or scalar @ARGV >= 1;
+# 1}}}
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 # Step 1:  Initialize global constants.
 #
+my $nFiles_Found               = 0;  # updated in make_file_list
+my $Regexp_Common_Is_Installed = 0;  # installed only if needed
 set_constants(               #        Sample values:
     \%Error_Codes          , # Error_Codes{UNABLE_TO_READ} = -1
     \%Language_by_Extension, # Language_by_Extension{f}    = 'Fortran 77' 
@@ -123,9 +129,6 @@ my %unique_source_file = ();
 remove_duplicate_files($fh, \%Language, \%unique_source_file);
 printf "%8d unique files.\n", scalar keys %unique_source_file;
 exit unless scalar keys %unique_source_file;
-
-# print Dumper(%Language, %Filters_by_Language);
-# print "Main:  ", Dumper(@{$Filters_by_Language{'C'}}), "\n";
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 # Step 4:  Count the lines of code, comments, and blank lines in
@@ -501,7 +504,6 @@ sub different_files { # {{{1
     print "<- different_files(@unique)\n" if $opt_v > 2;
     return @unique;
 } # 1}}}
-
 sub call_counter { # {{{1
     my ($file    , # in
         $language, # in
@@ -876,6 +878,7 @@ sub set_constants { # $rh_Error_Codes  {{{1
     'Javascript'         => [   [ 'remove_c_comments'   ,          ], ],
     'JCL'                => [   [ 'remove_jcl_comments' ,          ], ],
     'MATLAB'             => [   [ 'remove_matches'      , '^\s*%'  ], ], 
+    'Pascal'             => [   [ 'call_regexp_common'  , 'Pascal' ], ],
     'Perl'               => [   [ 'remove_below'        , '^__(END|DATA)__'],
                                 [ 'remove_matches'      , '^\s*#'  ], ], 
     'Python'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
@@ -1540,6 +1543,819 @@ sub set_constants { # $rh_Error_Codes  {{{1
 );
 # 1}}}
 } # end of sub set_constants()
+sub Install_Regexp_Common { # {{{1
+    # Installs portions of Damian Conway's & Abigail's Regexp::Common
+    # module, v2.120, into a temporary directory for the duration of
+    # this run.
+
+    my %Regexp_Common_Contents = ();
+$Regexp_Common_Contents{'Common'} = <<'EOCommon'; # {{{2
+package Regexp::Common;
+
+use 5.00473;
+use strict;
+
+local $^W = 1;
+
+use vars qw /$VERSION %RE %sub_interface $AUTOLOAD/;
+
+($VERSION) = q $Revision: 2.120 $ =~ /([\d.]+)/;
+
+
+sub _croak {
+    require Carp;
+    goto &Carp::croak;
+}
+
+sub _carp {
+    require Carp;
+    goto &Carp::carp;
+}
+
+sub new {
+    my ($class, @data) = @_;
+    my %self;
+    tie %self, $class, @data;
+    return \%self;
+}
+
+sub TIEHASH {
+    my ($class, @data) = @_;
+    bless \@data, $class;
+}
+
+sub FETCH {
+    my ($self, $extra) = @_;
+    return bless ref($self)->new(@$self, $extra), ref($self);
+}
+
+# Modification for cloc:  only need a few modules from Regexp::Common.
+my %imports = map {$_ => "Regexp::Common::$_"}
+              qw /balanced comment delimited /;
+#my %imports = map {$_ => "Regexp::Common::$_"}
+#              qw /balanced CC     comment   delimited lingua list
+#                  net      number profanity SEN       URI    whitespace
+#                  zip/;
+
+sub import {
+    shift;  # Shift off the class.
+    tie %RE, __PACKAGE__;
+    {
+        no strict 'refs';
+        *{caller() . "::RE"} = \%RE;
+    }
+
+    my $saw_import;
+    my $no_defaults;
+    my %exclude;
+    foreach my $entry (grep {!/^RE_/} @_) {
+        if ($entry eq 'pattern') {
+            no strict 'refs';
+            *{caller() . "::pattern"} = \&pattern;
+            next;
+        }
+        # This used to prevent $; from being set. We still recognize it,
+        # but we won't do anything.
+        if ($entry eq 'clean') {
+            next;
+        }
+        if ($entry eq 'no_defaults') {
+            $no_defaults ++;
+            next;
+        }
+        if (my $module = $imports {$entry}) {
+            $saw_import ++;
+            eval "require $module;";
+            die $@ if $@;
+            next;
+        }
+        if ($entry =~ /^!(.*)/ && $imports {$1}) {
+            $exclude {$1} ++;
+            next;
+        }
+        # As a last resort, try to load the argument.
+        my $module = $entry =~ /^Regexp::Common/
+                            ? $entry
+                            : "Regexp::Common::" . $entry;
+        eval "require $module;";
+        die $@ if $@;
+    }
+
+    unless ($saw_import || $no_defaults) {
+        foreach my $module (values %imports) {
+            next if $exclude {$module};
+            eval "require $module;";
+            die $@ if $@;
+        }
+    }
+
+    my %exported;
+    foreach my $entry (grep {/^RE_/} @_) {
+        if ($entry =~ /^RE_(\w+_)?ALL$/) {
+            my $m  = defined $1 ? $1 : "";
+            my $re = qr /^RE_${m}.*$/;
+            while (my ($sub, $interface) = each %sub_interface) {
+                next if $exported {$sub};
+                next unless $sub =~ /$re/;
+                {
+                    no strict 'refs';
+                    *{caller() . "::$sub"} = $interface;
+                }
+                $exported {$sub} ++;
+            }
+        }
+        else {
+            next if $exported {$entry};
+            _croak "Can't export unknown subroutine &$entry"
+                unless $sub_interface {$entry};
+            {
+                no strict 'refs';
+                *{caller() . "::$entry"} = $sub_interface {$entry};
+            }
+            $exported {$entry} ++;
+        }
+    }
+}
+
+sub AUTOLOAD { _croak "Can't $AUTOLOAD" }
+
+sub DESTROY {}
+
+my %cache;
+
+my $fpat = qr/^(-\w+)/;
+
+sub _decache {
+        my @args = @{tied %{$_[0]}};
+        my @nonflags = grep {!/$fpat/} @args;
+        my $cache = get_cache(@nonflags);
+        _croak "Can't create unknown regex: \$RE{"
+            . join("}{",@args) . "}"
+                unless exists $cache->{__VAL__};
+        _croak "Perl $] does not support the pattern "
+            . "\$RE{" . join("}{",@args)
+            . "}.\nYou need Perl $cache->{__VAL__}{version} or later"
+                unless ($cache->{__VAL__}{version}||0) <= $];
+        my %flags = ( %{$cache->{__VAL__}{default}},
+                      map { /$fpat\Q$;\E(.*)/ ? ($1 => $2)
+                          : /$fpat/           ? ($1 => undef)
+                          :                     ()
+                          } @args);
+        $cache->{__VAL__}->_clone_with(\@args, \%flags);
+}
+
+use overload q{""} => \&_decache;
+
+
+sub get_cache {
+        my $cache = \%cache;
+        foreach (@_) {
+                $cache = $cache->{$_}
+                      || ($cache->{$_} = {});
+        }
+        return $cache;
+}
+
+sub croak_version {
+        my ($entry, @args) = @_;
+}
+
+sub pattern {
+        my %spec = @_;
+        _croak 'pattern() requires argument: name => [ @list ]'
+                unless $spec{name} && ref $spec{name} eq 'ARRAY';
+        _croak 'pattern() requires argument: create => $sub_ref_or_string'
+                unless $spec{create};
+
+        if (ref $spec{create} ne "CODE") {
+                my $fixed_str = "$spec{create}";
+                $spec{create} = sub { $fixed_str }
+        }
+
+        my @nonflags;
+        my %default;
+        foreach ( @{$spec{name}} ) {
+                if (/$fpat=(.*)/) {
+                        $default{$1} = $2;
+                }
+                elsif (/$fpat\s*$/) {
+                        $default{$1} = undef;
+                }
+                else {
+                        push @nonflags, $_;
+                }
+        }
+
+        my $entry = get_cache(@nonflags);
+
+        if ($entry->{__VAL__}) {
+                _carp "Overriding \$RE{"
+                   . join("}{",@nonflags)
+                   . "}";
+        }
+
+        $entry->{__VAL__} = bless {
+                                create  => $spec{create},
+                                match   => $spec{match} || \&generic_match,
+                                subs    => $spec{subs}  || \&generic_subs,
+                                version => $spec{version},
+                                default => \%default,
+                            }, 'Regexp::Common::Entry';
+
+        foreach (@nonflags) {s/\W/X/g}
+        my $subname = "RE_" . join ("_", @nonflags);
+        $sub_interface{$subname} = sub {
+                push @_ => undef if @_ % 2;
+                my %flags = @_;
+                my $pat = $spec{create}->($entry->{__VAL__},
+                               {%default, %flags}, \@nonflags);
+                if (exists $flags{-keep}) { $pat =~ s/\Q(?k:/(/g; }
+                else { $pat =~ s/\Q(?k:/(?:/g; }
+                return exists $flags {-i} ? qr /(?i:$pat)/ : qr/$pat/;
+        };
+
+        return 1;
+}
+
+sub generic_match {$_ [1] =~  /$_[0]/}
+sub generic_subs  {$_ [1] =~ s/$_[0]/$_[2]/}
+
+sub matches {
+        my ($self, $str) = @_;
+        my $entry = $self -> _decache;
+        $entry -> {match} -> ($entry, $str);
+}
+
+sub subs {
+        my ($self, $str, $newstr) = @_;
+        my $entry = $self -> _decache;
+        $entry -> {subs} -> ($entry, $str, $newstr);
+        return $str;
+}
+
+
+package Regexp::Common::Entry;
+# use Carp;
+
+local $^W = 1;
+
+use overload
+    q{""} => sub {
+        my ($self) = @_;
+        my $pat = $self->{create}->($self, $self->{flags}, $self->{args});
+        if (exists $self->{flags}{-keep}) {
+            $pat =~ s/\Q(?k:/(/g;
+        }
+        else {
+            $pat =~ s/\Q(?k:/(?:/g;
+        }
+        if (exists $self->{flags}{-i})   { $pat = "(?i)$pat" }
+        return $pat;
+    };
+
+sub _clone_with {
+    my ($self, $args, $flags) = @_;
+    bless { %$self, args=>$args, flags=>$flags }, ref $self;
+}
+# 
+#    Copyright (c) 2001 - 2005, Damian Conway and Abigail. All Rights
+#  Reserved. This module is free software. It may be used, redistributed
+#      and/or modified under the terms of the Perl Artistic License
+#            (see http://www.perl.com/perl/misc/Artistic.html)
+EOCommon
+# 2}}}
+$Regexp_Common_Contents{'Common/comment'} = <<'EOC';   # {{{2
+# $Id: comment.pm,v 2.116 2005/03/16 00:00:02 abigail Exp $
+
+package Regexp::Common::comment;
+
+use strict;
+local $^W = 1;
+
+use Regexp::Common qw /pattern clean no_defaults/;
+use vars qw /$VERSION/;
+
+($VERSION) = q $Revision: 2.116 $ =~ /[\d.]+/g;
+
+my @generic = (
+    {languages => [qw /ABC Forth/],
+     to_eol    => ['\\\\']},   # This is for just a *single* backslash.
+
+    {languages => [qw /Ada Alan Eiffel lua/],
+     to_eol    => ['--']},
+
+    {languages => [qw /Advisor/],
+     to_eol    => ['#|//']},
+
+    {languages => [qw /Advsys CQL Lisp LOGO M MUMPS REBOL Scheme
+                       SMITH zonefile/],
+     to_eol    => [';']},
+
+    {languages => ['Algol 60'],
+     from_to   => [[qw /comment ;/]]},
+
+    {languages => [qw {ALPACA B C C-- LPC PL/I}],
+     from_to   => [[qw {/* */}]]},
+
+    {languages => [qw /awk fvwm2 Icon mutt Perl Python QML R Ruby shell Tcl/],
+     to_eol    => ['#']},
+
+    {languages => [[BASIC => 'mvEnterprise']],
+     to_eol    => ['[*!]|REM']},
+
+    {languages => [qw /Befunge-98 Funge-98 Shelta/],
+     id        => [';']},
+
+    {languages => ['beta-Juliet', 'Crystal Report', 'Portia'],
+     to_eol    => ['//']},
+
+    {languages => ['BML'],
+     from_to   => [['<?_c', '_c?>']],
+    },
+
+    {languages => [qw /C++/, 'C#', qw /Cg ECMAScript FPL Java JavaScript/],
+     to_eol    => ['//'],
+     from_to   => [[qw {/* */}]]},
+
+    {languages => [qw /CLU LaTeX slrn TeX/],
+     to_eol    => ['%']},
+
+    {languages => [qw /False/],
+     from_to   => [[qw !{ }!]]},
+
+    {languages => [qw /Fortran/],
+     to_eol    => ['!']},
+
+    {languages => [qw /Haifu/],
+     id        => [',']},
+
+    {languages => [qw /ILLGOL/],
+     to_eol    => ['NB']},
+
+    {languages => [qw /INTERCAL/],
+     to_eol    => [q{(?:(?:PLEASE(?:\s+DO)?|DO)\s+)?(?:NOT|N'T)}]},
+
+    {languages => [qw /J/],
+     to_eol    => ['NB[.]']},
+
+    {languages => [qw /Nickle/],
+     to_eol    => ['#'],
+     from_to   => [[qw {/* */}]]},
+
+    {languages => [qw /Oberon/],
+     from_to   => [[qw /(* *)/]]},
+     
+    {languages => [[qw /Pascal Delphi/], [qw /Pascal Free/], [qw /Pascal GPC/]],
+     to_eol    => ['//'],
+     from_to   => [[qw !{ }!], [qw !(* *)!]]},
+
+    {languages => [[qw /Pascal Workshop/]],
+     id        => [qw /"/],
+     from_to   => [[qw !{ }!], [qw !(* *)!], [qw !/* */!]]},
+
+    {languages => [qw /PEARL/],
+     to_eol    => ['!'],
+     from_to   => [[qw {/* */}]]},
+
+    {languages => [qw /PHP/],
+     to_eol    => ['#', '//'],
+     from_to   => [[qw {/* */}]]},
+
+    {languages => [qw !PL/B!],
+     to_eol    => ['[.;]']},
+
+    {languages => [qw !PL/SQL!],
+     to_eol    => ['--'],
+     from_to   => [[qw {/* */}]]},
+
+    {languages => [qw /Q-BAL/],
+     to_eol    => ['`']},
+
+    {languages => [qw /Smalltalk/],
+     id        => ['"']},
+
+    {languages => [qw /SQL/],
+     to_eol    => ['-{2,}']},
+
+    {languages => [qw /troff/],
+     to_eol    => ['\\\"']},
+
+    {languages => [qw /vi/],
+     to_eol    => ['"']},
+
+    {languages => [qw /*W/],
+     from_to   => [[qw {|| !!}]]},
+);
+
+my @plain_or_nested = (
+   [Caml         =>  undef,       "(*"  => "*)"],
+   [Dylan        =>  "//",        "/*"  => "*/"],
+   [Haskell      =>  "-{2,}",     "{-"  => "-}"],
+   [Hugo         =>  "!(?!\\\\)", "!\\" => "\\!"],
+   [SLIDE        =>  "#",         "(*"  => "*)"],
+);
+
+#
+# Helper subs.
+#
+
+sub combine      {
+    local $_ = join "|", @_;
+    if (@_ > 1) {
+        s/\(\?k:/(?:/g;
+        $_ = "(?k:$_)";
+    }
+    $_
+}
+
+sub to_eol  ($)  {"(?k:(?k:$_[0])(?k:[^\\n]*)(?k:\\n))"}
+sub id      ($)  {"(?k:(?k:$_[0])(?k:[^$_[0]]*)(?k:$_[0]))"}  # One char only!
+sub from_to      {
+    local $^W = 1;
+    my ($begin, $end) = @_;
+
+    my $qb  = quotemeta $begin;
+    my $qe  = quotemeta $end;
+    my $fe  = quotemeta substr $end   => 0, 1;
+    my $te  = quotemeta substr $end   => 1;
+
+    "(?k:(?k:$qb)(?k:(?:[^$fe]+|$fe(?!$te))*)(?k:$qe))";
+}
+
+
+my $count = 0;
+sub nested {
+    local $^W = 1;
+    my ($begin, $end) = @_;
+
+    $count ++;
+    my $r = '(??{$Regexp::Common::comment ['. $count . ']})';
+
+    my $qb  = quotemeta $begin;
+    my $qe  = quotemeta $end;
+    my $fb  = quotemeta substr $begin => 0, 1;
+    my $fe  = quotemeta substr $end   => 0, 1;
+
+    my $tb  = quotemeta substr $begin => 1;
+    my $te  = quotemeta substr $end   => 1;
+
+    use re 'eval';
+
+    my $re;
+    if ($fb eq $fe) {
+        $re = qr /(?:$qb(?:(?>[^$fb]+)|$fb(?!$tb)(?!$te)|$r)*$qe)/;
+    }
+    else {
+        local $"      =  "|";
+        my   @clauses =  "(?>[^$fb$fe]+)";
+        push @clauses => "$fb(?!$tb)" if length $tb;
+        push @clauses => "$fe(?!$te)" if length $te;
+        push @clauses =>  $r;
+        $re           =   qr /(?:$qb(?:@clauses)*$qe)/;
+    }
+
+    $Regexp::Common::comment [$count] = qr/$re/;
+}
+
+#
+# Process data.
+#
+
+foreach my $info (@plain_or_nested) {
+    my ($language, $mark, $begin, $end) = @$info;
+    pattern name    => [comment => $language],
+            create  =>
+                sub {my $re     = nested $begin => $end;
+                     my $prefix = defined $mark ? $mark . "[^\n]*\n|" : "";
+                     exists $_ [1] -> {-keep} ? qr /($prefix$re)/
+                                              : qr  /$prefix$re/
+                },
+            version => 5.006,
+            ;
+}
+
+
+foreach my $group (@generic) {
+    my $pattern = combine +(map {to_eol   $_} @{$group -> {to_eol}}),
+                           (map {from_to @$_} @{$group -> {from_to}}),
+                           (map {id       $_} @{$group -> {id}}),
+                  ;
+    foreach my $language  (@{$group -> {languages}}) {
+        pattern name    => [comment => ref $language ? @$language : $language],
+                create  => $pattern,
+                ;
+    }
+}
+                
+
+    
+#
+# Other languages.
+#
+
+# http://www.pascal-central.com/docs/iso10206.txt
+pattern name    => [qw /comment Pascal/],
+        create  => '(?k:' . '(?k:[{]|[(][*])'
+                          . '(?k:[^}*]*(?:[*][^)][^}*]*)*)'
+                          . '(?k:[}]|[*][)])'
+                          . ')'
+        ;
+
+# http://www.templetons.com/brad/alice/language/
+pattern name    =>  [qw /comment Pascal Alice/],
+        create  =>  '(?k:(?k:[{])(?k:[^}\n]*)(?k:[}]))'
+        ;
+
+
+# http://westein.arb-phys.uni-dortmund.de/~wb/a68s.txt
+pattern name    => [qw (comment), 'Algol 68'],
+        create  => q {(?k:(?:#[^#]*#)|}                           .
+                   q {(?:\bco\b(?:[^c]+|\Bc|\bc(?!o\b))*\bco\b)|} .
+                   q {(?:\bcomment\b(?:[^c]+|\Bc|\bc(?!omment\b))*\bcomment\b))}
+        ;
+
+
+# See rules 91 and 92 of ISO 8879 (SGML).
+# Charles F. Goldfarb: "The SGML Handbook".
+# Oxford: Oxford University Press. 1990. ISBN 0-19-853737-9.
+# Ch. 10.3, pp 390.
+pattern name    => [qw (comment HTML)],
+        create  => q {(?k:(?k:<!)(?k:(?:--(?k:[^-]*(?:-[^-]+)*)--\s*)*)(?k:>))},
+        ;
+
+
+pattern name    => [qw /comment SQL MySQL/],
+        create  => q {(?k:(?:#|-- )[^\n]*\n|} .
+                   q {/\*(?:(?>[^*;"']+)|"[^"]*"|'[^']*'|\*(?!/))*(?:;|\*/))},
+        ;
+
+# Anything that isn't <>[]+-.,
+# http://home.wxs.nl/~faase009/Ha_BF.html
+pattern name    => [qw /comment Brainfuck/],
+        create  => '(?k:[^<>\[\]+\-.,]+)'
+        ;
+
+# Squeak is a variant of Smalltalk-80.
+# http://www.squeak.
+# http://mucow.com/squeak-qref.html
+pattern name    => [qw /comment Squeak/],
+        create  => '(?k:(?k:")(?k:[^"]*(?:""[^"]*)*)(?k:"))'
+        ;
+
+#
+# Scores of less than 5 or above 17....
+# http://www.cliff.biffle.org/esoterica/beatnik.html
+@Regexp::Common::comment::scores = (1,  3,  3,  2,  1,  4,  2,  4,  1,  8,
+                                    5,  1,  3,  1,  1,  3, 10,  1,  1,  1,
+                                    1,  4,  4,  8,  4, 10);
+pattern name    =>  [qw /comment Beatnik/],
+        create  =>  sub {
+            use re 'eval';
+            my ($s, $x);
+            my $re = qr {\b([A-Za-z]+)\b
+                         (?(?{($s, $x) = (0, lc $^N);
+                              $s += $Regexp::Common::comment::scores
+                                    [ord (chop $x) - ord ('a')] while length $x;
+                              $s  >= 5 && $s < 18})XXX|)}x;
+            $re;
+        },
+        version  => 5.008,
+        ;
+
+
+# http://www.cray.com/craydoc/manuals/007-3692-005/html-007-3692-005/
+#  (Goto table of contents/3.3 Source Form)
+# Fortran, in fixed format. Comments start with a C, c or * in the first
+# column, or a ! anywhere, but the sixth column. Then end with a newline.
+pattern name    =>  [qw /comment Fortran fixed/],
+        create  =>  '(?k:(?k:(?:^[Cc*]|(?<!^.....)!))(?k:[^\n]*)(?k:\n))'
+        ;
+
+
+# http://www.csis.ul.ie/cobol/Course/COBOLIntro.htm
+# Traditionally, comments in COBOL were indicated with an asteriks in
+# the seventh column. Modern compilers may be more lenient.
+pattern name    =>  [qw /comment COBOL/],
+        create  =>  '(?<=^......)(?k:(?k:[*])(?k:[^\n]*)(?k:\n))',
+        version =>  '5.008',
+        ;
+
+1;
+#
+#    Copyright (c) 2001 - 2003, Damian Conway. All Rights Reserved.
+#      This module is free software. It may be used, redistributed
+#     and/or modified under the terms of the Perl Artistic License
+#           (see http://www.perl.com/perl/misc/Artistic.html)
+EOC
+# 2}}}
+$Regexp_Common_Contents{'Common/balanced'} = <<'EOB';   # {{{2
+package Regexp::Common::balanced; {
+
+use strict;
+local $^W = 1;
+
+use vars qw /$VERSION/;
+($VERSION) = q $Revision: 2.101 $ =~ /[\d.]+/g;
+
+use Regexp::Common qw /pattern clean no_defaults/;
+
+my %closer = ( '{'=>'}', '('=>')', '['=>']', '<'=>'>' );
+my $count = -1;
+my %cache;
+
+sub nested {
+    local $^W = 1;
+    my ($start, $finish) = @_;
+
+    return $Regexp::Common::balanced [$cache {$start} {$finish}]
+            if exists $cache {$start} {$finish};
+
+    $count ++;
+    my $r = '(??{$Regexp::Common::balanced ['. $count . ']})';
+
+    my @starts   = map {s/\\(.)/$1/g; $_} grep {length}
+                        $start  =~ /([^|\\]+|\\.)+/gs;
+    my @finishes = map {s/\\(.)/$1/g; $_} grep {length}
+                        $finish =~ /([^|\\]+|\\.)+/gs;
+
+    push @finishes => ($finishes [-1]) x (@starts - @finishes);
+
+    my @re;
+    local $" = "|";
+    foreach my $begin (@starts) {
+        my $end = shift @finishes;
+
+        my $qb  = quotemeta $begin;
+        my $qe  = quotemeta $end;
+        my $fb  = quotemeta substr $begin => 0, 1;
+        my $fe  = quotemeta substr $end   => 0, 1;
+
+        my $tb  = quotemeta substr $begin => 1;
+        my $te  = quotemeta substr $end   => 1;
+
+        use re 'eval';
+
+        my $add;
+        if ($fb eq $fe) {
+            push @re =>
+                   qr /(?:$qb(?:(?>[^$fb]+)|$fb(?!$tb)(?!$te)|$r)*$qe)/;
+        }
+        else {
+            my   @clauses =  "(?>[^$fb$fe]+)";
+            push @clauses => "$fb(?!$tb)" if length $tb;
+            push @clauses => "$fe(?!$te)" if length $te;
+            push @clauses =>  $r;
+            push @re      =>  qr /(?:$qb(?:@clauses)*$qe)/;
+        }
+    }
+
+    $cache {$start} {$finish} = $count;
+    $Regexp::Common::balanced [$count] = qr/@re/;
+}
+
+
+pattern name    => [qw /balanced -parens=() -begin= -end=/],
+        create  => sub {
+            my $flag = $_[1];
+            unless (defined $flag -> {-begin} && length $flag -> {-begin} &&
+                    defined $flag -> {-end}   && length $flag -> {-end}) {
+                my @open  = grep {index ($flag->{-parens}, $_) >= 0}
+                             ('[','(','{','<');
+                my @close = map {$closer {$_}} @open;
+                $flag -> {-begin} = join "|" => @open;
+                $flag -> {-end}   = join "|" => @close;
+            }
+            my $pat = nested @$flag {qw /-begin -end/};
+            return exists $flag -> {-keep} ? qr /($pat)/ : $pat;
+        },
+        version => 5.006,
+        ;
+
+}
+
+1;
+#
+#     Copyright (c) 2001 - 2003, Damian Conway. All Rights Reserved.
+#       This module is free software. It may be used, redistributed
+#      and/or modified under the terms of the Perl Artistic License
+#            (see http://www.perl.com/perl/misc/Artistic.html)
+EOB
+# 2}}}
+$Regexp_Common_Contents{'Common/delimited'} = <<'EOD';   # {{{2
+# $Id: delimited.pm,v 2.104 2005/03/16 00:22:45 abigail Exp $
+
+package Regexp::Common::delimited;
+
+use strict;
+local $^W = 1;
+
+use Regexp::Common qw /pattern clean no_defaults/;
+use vars qw /$VERSION/;
+
+($VERSION) = q $Revision: 2.104 $ =~ /[\d.]+/g;
+
+sub gen_delimited {
+
+    my ($dels, $escs) = @_;
+    # return '(?:\S*)' unless $dels =~ /\S/;
+    if (length $escs) {
+        $escs .= substr ($escs, -1) x (length ($dels) - length ($escs));
+    }
+    my @pat = ();
+    my $i;
+    for ($i=0; $i < length $dels; $i++) {
+        my $del = quotemeta substr ($dels, $i, 1);
+        my $esc = length($escs) ? quotemeta substr ($escs, $i, 1) : "";
+        if ($del eq $esc) {
+            push @pat,
+                 "(?k:$del)(?k:[^$del]*(?:(?:$del$del)[^$del]*)*)(?k:$del)";
+        }
+        elsif (length $esc) {
+            push @pat,
+                 "(?k:$del)(?k:[^$esc$del]*(?:$esc.[^$esc$del]*)*)(?k:$del)";
+        }
+        else {
+            push @pat, "(?k:$del)(?k:[^$del]*)(?k:$del)";
+        }
+    }
+    my $pat = join '|', @pat;
+    return "(?k:$pat)";
+}
+
+sub _croak {
+    require Carp;
+    goto &Carp::croak;
+}
+
+pattern name   => [qw( delimited -delim= -esc=\\ )],
+        create => sub {my $flags = $_[1];
+                       _croak 'Must specify delimiter in $RE{delimited}'
+                             unless length $flags->{-delim};
+                       return gen_delimited (@{$flags}{-delim, -esc});
+                  },
+        ;
+
+pattern name   => [qw( quoted -esc=\\ )],
+        create => sub {my $flags = $_[1];
+                       return gen_delimited (q{"'`}, $flags -> {-esc});
+                  },
+        ;
+
+
+1;
+#
+#     Copyright (c) 2001 - 2003, Damian Conway. All Rights Reserved.
+#       This module is free software. It may be used, redistributed
+#      and/or modified under the terms of the Perl Artistic License
+#            (see http://www.perl.com/perl/misc/Artistic.html)
+EOD
+# 2}}}
+    my $problems                = 0;
+    $Regexp_Common_Is_Installed = 0;
+    my $dir = tempdir( CLEANUP => 0 );  # 1 = delete on exit
+print "Using temp dir [$dir] to install Regexp::Common\n";
+    my $Regexp_dir        = "$dir/Regexp";
+    my $Regexp_Common_dir = "$dir/Regexp/Common";
+    mkdir $Regexp_dir       ;
+    mkdir $Regexp_Common_dir;
+
+    foreach my $module_file (keys %Regexp_Common_Contents) {
+        my $OUT = new IO::File "$dir/Regexp/${module_file}.pm", "w";
+        if (defined $OUT) {
+            print $OUT $Regexp_Common_Contents{$module_file};
+            $OUT->close;
+        } else {
+            warn "Failed to install Regexp::${module_file}.pm\n";
+            $problems = 1;
+        }
+    }
+
+    push @INC, $dir;
+    eval "use Regexp::Common qw /comment RE_comment_HTML/";
+    $Regexp_Common_Is_Installed = 1 unless $problems;
+} # 1}}}
+sub call_regexp_common { # {{{1
+    my ($ra_lines, $language ) = @_;
+
+    Install_Regexp_Common() unless $Regexp_Common_Is_Installed;
+
+    print "-> call_regexp_common\n" if $opt_v > 2;
+
+    my $all_lines = join("", @{$ra_lines});
+
+    no strict 'vars';
+    # otherwise get:
+    #  Global symbol "%RE" requires explicit package name at cloc line xx.
+    if ($all_lines =~ $RE{comment}{$language}) {
+        $all_lines =~ s/$1//g;
+    }
+    # a bogus use of %RE to avoid:
+    # Name "main::RE" used only once: possible typo at cloc line xx.
+    print scalar keys %RE if $opt_v < -20;
+
+    print "<- call_regexp_common\n" if $opt_v > 2;
+    return split("\n", $all_lines);
+} # 1}}}
 
 # subroutines copied from SLOCCount
 my %lex_files = ();     # really_is_lex()
