@@ -191,10 +191,13 @@ sub print_report { # {{{1
        ) = @_;
 
     my $URL   = "http://cloc.sourceforge.net";
-    my $eq    = "=" x 10;
-    my $title = sprintf "%s cloc version %5.2f %s %s %s", 
-                        $eq, $version, $eq, $URL, $eq;
-    printf "%s\n%-14s %9s %9s %9s %9s %8s   %14s\n",
+#   my $eq    = "=" x 10;
+#   my $title = sprintf "%s cloc version %5.2f %s %s %s", 
+#                       $eq, $version, $eq, $URL, $eq;
+    my $eq    = "=" x 32;
+    my $title = sprintf "cloc version %5.2f %s %s", 
+                        $version, $eq, $URL;
+    printf "%s\n%-13s %9s %9s %9s %9s %8s   %14s\n",
         $title          ,
         "Language"      ,
         "files"         ,
@@ -203,7 +206,7 @@ sub print_report { # {{{1
         "code"          ,
         "scale"         ,
         "3rd gen. equiv";
-    print '-' x 80, "\n";
+    print '-' x 79, "\n";
 
     my $sum_files     = 0;
     my $sum_code      = 0;
@@ -218,7 +221,7 @@ sub print_report { # {{{1
         die "No scale factor for $language"
             unless defined $rh_scale->{$language};
         my $scaled = $rh_scale->{$language}*$rhh_count->{$language}{'code'};
-        printf "%-14s %9d %9d %9d %9d x %6.2f = %14.2f\n",
+        printf "%-13s %9d %9d %9d %9d x %6.2f = %14.2f\n",
             $language                         ,
             $rhh_count->{$language}{'nFiles'} ,
             $rhh_count->{$language}{'blank'}  ,
@@ -232,8 +235,8 @@ sub print_report { # {{{1
         $sum_code    += $rhh_count->{$language}{'code'}   ;
         $sum_scaled  += $scaled;
     }
-    print '-' x 80, "\n";
-    printf "%-14s %9d %9d %9d %9d %10s %14.2f\n",
+    print '-' x 79, "\n";
+    printf "%-13s %9d %9d %9d %9d %10s %14.2f\n",
         "SUM:"       ,
         $sum_files   ,
         $sum_blank   ,
