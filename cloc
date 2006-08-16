@@ -141,22 +141,10 @@ foreach my $file (sort keys %unique_source_file) {
         $Ignored{$file} = 1;
         next;
     }
-#print "Main:  file=$file lang=$Language{$file}\n";
-#print "Main:  C_by_L "; 
-#print Dumper($Language{$file});
-#print Dumper($Filters_by_Language{'C'});
-#print Dumper($Filters_by_Language{$Language{$file}});
-#print "\n";
     my ($all_line_count,
         $blank_count   ,
         $comment_count ,
        ) = call_counter($file, $Language{$file});
-#printf "%-30s %-10s all=%5d blank=%5d comment=%5d\n", 
-#$file            ,
-#$Language{$file} ,
-#$all_line_count  ,
-#$blank_count     ,
-#$comment_count   ;
     ++$Results_by_Language{$Language{$file}}{'nFiles'};
     $Results_by_Language{$Language{$file}}{'code'}    += $all_line_count -
                                                          $blank_count    -
@@ -166,13 +154,21 @@ foreach my $file (sort keys %unique_source_file) {
 }
 if ($keep_ignored) {
     my $OUT = new IO::File $keep_ignored, "w";
-    print $OUT join("\n", sort keys %Ignored), "\n";
-    $OUT->close;
+    if (defined $OUT) {
+        print $OUT join("\n", sort keys %Ignored), "\n";
+        $OUT->close;
+    } else {
+        warn "Unable to write to $keep_ignored; skipping.\n";
+    }
 }
 if ($keep_counted) {
     my $OUT = new IO::File $keep_counted, "w";
-    print $OUT join("\n", sort keys %Language), "\n";
-    $OUT->close;
+    if (defined $OUT) {
+        print $OUT join("\n", sort keys %Language), "\n";
+        $OUT->close;
+    } else {
+        warn "Unable to write to $keep_counted; skipping.\n";
+    }
 }
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
