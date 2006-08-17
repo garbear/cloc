@@ -36,12 +36,13 @@ use File::Basename;
 use File::Temp qw { tempfile tempdir };
 use File::Find;
 use IO::File;
-use Digest::MD5;
+use Digest::MD5;                    # not in standard distribution
+use Text::Tabs qw { expand };
 #use Data::Dumper::Simple;
 
 $| = 1;  # flush stdout
 
-# Usage information {{{1
+# Usage information, options processing {{{1
 my $script = basename $0;
 my $usage  = "
 Usage: $script [options] <file(s)/dir(s)>
@@ -61,34 +62,43 @@ Usage: $script [options] <file(s)/dir(s)>
                              given) languages and exit.
    --progress_rate=<n>       Show progress update after every <n> files are
                              processed (default <n>=1000).
-   --print_filter_stages     Print processed source code before and after each
-                             filter is applied.
+   --print_filter_stages     Print to STDOUT processed source code before and 
+                             after each filter is applied.
+   --strip_blanks            Print to STDOUT the input file(s) after blank
+                             lines have been removed
+   --strip_comments          Print to STDOUT the input file(s) after blank
+                             lines and comments have been removed.
+   --quiet                   Suppress all information messages except for
+                             the final report.
    --version                 Print the version of this program and exit.
 
 ";
-my ($keep_found, $keep_categorized, $keep_ignored, $keep_counted, 
-    $show_ext, $show_lang, $progress_rate, $print_filter_stages, $opt_v,
-    $opt_version,
+my ($opt_keep_found, $opt_keep_categorized, $opt_keep_ignored, $opt_keep_counted, 
+    $opt_show_ext, $opt_show_lang, $opt_progress_rate, $opt_print_filter_stages, 
+    $opt_v, $opt_version, $opt_strip_blanks, $opt_strip_comments, $opt_quiet,
     %Error_Codes, %Language_by_Extension, %Language_by_Script,
     %Filters_by_Language, %Not_Code_Extensions, %Not_Code_Filename,
     %Scale_Factor,
    );
 GetOptions(
-           "keep_found=s"        => \$keep_found          ,
-           "keep_categorized=s"  => \$keep_categorized    ,
-           "keep_ignored=s"      => \$keep_ignored        ,
-           "keep_counted=s"      => \$keep_counted        ,
-           "show_ext:s"          => \$show_ext            ,
-           "show_lang:s"         => \$show_lang           ,
-           "progress_rate=i"     => \$progress_rate       ,
-           "v:i"                 => \$opt_v               ,
-           "print_filter_stages" => \$print_filter_stages ,
-           "version"             => \$opt_version         ,
+           "keep_found=s"        => \$opt_keep_found          ,
+           "keep_categorized=s"  => \$opt_keep_categorized    ,
+           "keep_ignored=s"      => \$opt_keep_ignored        ,
+           "keep_counted=s"      => \$opt_keep_counted        ,
+           "show_ext:s"          => \$opt_show_ext            ,
+           "show_lang:s"         => \$opt_show_lang           ,
+           "progress_rate=i"     => \$opt_progress_rate       ,
+           "v:i"                 => \$opt_v                   ,
+           "print_filter_stages" => \$opt_print_filter_stages ,
+           "strip_blanks"        => \$opt_strip_blanks        ,
+           "strip_comments"      => \$opt_strip_comments      ,
+           "version"             => \$opt_version             ,
+           "quiet"               => \$opt_quiet               ,
           );
 # Options defaults:
-$progress_rate  = 1000 unless $progress_rate;
+$opt_progress_rate  = 1000 unless $opt_progress_rate;
 $opt_v          =    0 unless $opt_v;
-die $usage unless defined $show_lang or defined $show_ext or scalar @ARGV >= 1;
+die $usage unless defined $opt_show_lang or defined $opt_show_ext or scalar @ARGV >= 1;
 # 1}}}
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -106,9 +116,9 @@ set_constants(               #        Sample values:
     \%Not_Code_Filename    , # Not_Code_Filename{README}   = 1
     \%Scale_Factor         , # Scale_Factor{Perl}          = 4.0
     );
-print_extension_info($show_ext) if defined $show_ext;
-print_language_info($show_lang) if defined $show_lang;
-exit if (defined $show_ext) or (defined $show_lang);
+print_extension_info($opt_show_ext) if defined $opt_show_ext;
+print_language_info($opt_show_lang) if defined $opt_show_lang;
+exit if (defined $opt_show_ext) or (defined $opt_show_lang);
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 # Step 2:  a) Create a list of every file that might contain source
@@ -127,7 +137,8 @@ my $fh = make_file_list(\@ARGV, \%Error_Codes, \@Errors, \%Ignored);
 my %Language           = ();
 my %unique_source_file = ();
 remove_duplicate_files($fh, \%Language, \%unique_source_file);
-printf "%8d unique files.\n", scalar keys %unique_source_file;
+printf "%8d unique file%s.\n", plural_form(scalar keys %unique_source_file) 
+    unless $opt_quiet;
 exit unless scalar keys %unique_source_file;
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -155,29 +166,30 @@ foreach my $file (sort keys %unique_source_file) {
     $Results_by_Language{$Language{$file}}{'blank'}   += $blank_count;
     $Results_by_Language{$Language{$file}}{'comment'} += $comment_count;
 }
-if ($keep_ignored) {
-    my $OUT = new IO::File $keep_ignored, "w";
+if ($opt_keep_ignored) {
+    my $OUT = new IO::File $opt_keep_ignored, "w";
     if (defined $OUT) {
         print $OUT join("\n", sort keys %Ignored), "\n";
         $OUT->close;
     } else {
-        warn "Unable to write to $keep_ignored; skipping.\n";
+        warn "Unable to write to $opt_keep_ignored; skipping.\n";
     }
 }
-if ($keep_counted) {
-    my $OUT = new IO::File $keep_counted, "w";
+if ($opt_keep_counted) {
+    my $OUT = new IO::File $opt_keep_counted, "w";
     if (defined $OUT) {
         print $OUT join("\n", sort keys %Language), "\n";
         $OUT->close;
     } else {
-        warn "Unable to write to $keep_counted; skipping.\n";
+        warn "Unable to write to $opt_keep_counted; skipping.\n";
     }
 }
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 # Step 5:  Print the results.
 #
-printf "%8d files ignored.\n", scalar keys %Ignored;
+printf "%8d file%s ignored.\n", plural_form(scalar keys %Ignored) 
+    unless $opt_quiet;
 if (@Errors) {
     printf "%d errors:\n", scalar @Errors;
     print Dumper(@Errors) if @Errors;
@@ -284,13 +296,13 @@ sub make_file_list { # {{{1
         ) = @_;
 
     my ($fh, $filename);
-    if ($keep_categorized) {
-        $filename = $keep_categorized;
+    if ($opt_keep_categorized) {
+        $filename = $opt_keep_categorized;
         $fh = new IO::File $filename, "+>";  # open for read/write
         die "Unable to write to $filename:  $!\n" unless defined $fh;
     } else {
         ($fh, $filename) = tempfile(UNLINK => 1);  # delete file on exit
-        print "Using temp file list [$filename]\n";
+        print "Using temp file list [$filename]\n" unless $opt_quiet;
     }
 
     my @dir_list = ();
@@ -319,9 +331,9 @@ sub make_file_list { # {{{1
         find(\&files, $dir);  # populates global variable @file_list
     }
     $nFiles_Found = scalar @file_list;
-    printf "%8d text files.\n", $nFiles_Found;
-    if ($keep_found) {
-        my $OUT = new IO::File $keep_found, "w";
+    printf "%8d text file%s.\n", plural_form($nFiles_Found) unless $opt_quiet;
+    if ($opt_keep_found) {
+        my $OUT = new IO::File $opt_keep_found, "w";
         print $OUT join("\n", sort @file_list), "\n";
         $OUT->close;
     }
@@ -340,7 +352,7 @@ die  "make_file_list($file) undef lang" unless defined $language;
         printf $fh "%d,%s,%s\n", $size_in_bytes, $language, $file;
         ++$nFiles_Categorized;
         printf "Categorized %8d files\r", 
-            $nFiles_Categorized unless $nFiles_Categorized % $progress_rate;
+            $nFiles_Categorized unless $nFiles_Categorized % $opt_progress_rate;
     }
 
     return $fh;   # handle to the file containing the list of files to process
@@ -383,7 +395,7 @@ sub files { # {{{1
         $File::Find::name, $nBytes, $is_dir, $is_bin if $opt_v > 5;
     return if $is_dir or $is_bin;
     ++$nFiles_Found;
-    printf "%8d files\r", $nFiles_Found unless $nFiles_Found % $progress_rate;
+    printf "%8d files\r", $nFiles_Found unless $nFiles_Found % $opt_progress_rate;
     push @file_list, $File::Find::name;
 } # 1}}}
 sub is_file { # {{{1
@@ -533,30 +545,39 @@ sub call_counter { # {{{1
 
     my $total_lines = scalar @lines;
 
-    print_lines($file, "Original file:",       \@lines) if $print_filter_stages;
-    @lines = remove_matches(\@lines, '^\s*$'); # removes blank lines
+    print_lines($file, "Original file:",       \@lines) if $opt_print_filter_stages;
+    if ($language eq "COBOL") {
+        @lines = remove_cobol_blanks(\@lines);
+    } else {
+        @lines = remove_matches(\@lines, '^\s*$'); # removes blank lines
+    }
     my $blank_lines = $total_lines - scalar @lines;
-    print_lines($file, "Blank lines removed:", \@lines) if $print_filter_stages;
+    print_lines($file, "Blank lines removed:", \@lines) 
+        if $opt_print_filter_stages;
+    print join("", @lines) if $opt_strip_blanks;
 
     foreach my $call_string (@routines) {
 #print "call_counter:  call_string=", Dumper($call_string), "\n";
         my $subroutine = $call_string->[0];
-die "call_counter undefined subroutine $subroutine for $file\n" 
-    unless defined &{$subroutine};
+        if (! defined &{$subroutine}) {
+            warn "call_counter undefined subroutine $subroutine for $file\n";
+            next;
+        }
         print "call_counter file=$file sub=$subroutine\n" if $opt_v > 1;
         my @args  = @{$call_string};
         shift @args; # drop the subroutine name
+
         no strict 'refs';
         @lines = &{$subroutine}(\@lines, @args);   # apply filter...
+
         print_lines($file, "After $subroutine(@args)", \@lines) 
-            if $print_filter_stages;
+            if $opt_print_filter_stages;
         @lines = remove_matches(\@lines, '^\s*$'); # ...then remove blank lines
         print_lines($file, "post $subroutine(@args) blanks cleanup:", \@lines) 
-            if $print_filter_stages;
-#printf "call_counter after calling %s have %d lines of code [\n%s]\n",
-#$subroutine, scalar  @lines, join("\n", @lines);
+            if $opt_print_filter_stages;
     }
     my $comment_lines = $total_lines - $blank_lines - scalar  @lines;
+    print join("", @lines) if $opt_strip_comments;
 
     print "<- call_counter($total_lines, $blank_lines, $comment_lines)\n" 
         if $opt_v > 2;
@@ -633,6 +654,24 @@ sub remove_below { # {{{1
     }
 
     print "<- remove_below\n" if $opt_v > 2;
+    return @save_lines;
+} # 1}}}
+sub remove_cobol_blanks { # {{{1
+    # subroutines derived from SLOCCount
+    my ($ra_lines, ) = @_;
+
+    my $free_format = 0;  # Support "free format" source code.
+    my @save_lines  = ();
+  
+    foreach (@{$ra_lines}) {
+        next if m/^\s*$/;
+        my $line = expand($_);  # convert tabs to equivalent spaces
+        $free_format = 1 if $line =~ m/^......\$.*SET.*SOURCEFORMAT.*FREE/i;
+        if (!$free_format) {
+            push @save_lines, $_ unless m/^\d{6}\s*$/ or
+                                        ($line =~ m/^\d{6}\s{66}/);
+        }
+    }
     return @save_lines;
 } # 1}}}
 sub remove_cobol_comments { # {{{1
@@ -2316,7 +2355,7 @@ EOD
     my $problems                = 0;
     $Regexp_Common_Is_Installed = 0;
     my $dir = tempdir( CLEANUP => 0 );  # 1 = delete on exit
-print "Using temp dir [$dir] to install Regexp::Common\n";
+    print "Using temp dir [$dir] to install Regexp::Common\n" unless $opt_quiet;
     my $Regexp_dir        = "$dir/Regexp";
     my $Regexp_Common_dir = "$dir/Regexp/Common";
     mkdir $Regexp_dir       ;
@@ -2358,6 +2397,12 @@ sub call_regexp_common { # {{{1
 
     print "<- call_regexp_common\n" if $opt_v > 2;
     return split("\n", $all_lines);
+} # 1}}}
+sub plural_form { # {{{1
+    # For getting the right plural form on some English nouns.
+    my $n = shift @_;
+    if ($n == 1) { return ( 1, "" ); }
+    else         { return ($n, "s"); }
 } # 1}}}
 
 # subroutines copied from SLOCCount
