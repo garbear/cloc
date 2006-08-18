@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-my $VERSION = 0.5;
+my $VERSION = 0.6;
  
 # cloc -- Count Lines of Code {{{1
 # Copyright (C) 2006 Northrop Grumman Corporation
@@ -58,7 +58,7 @@ Usage: $script [options] <file(s)/dir(s)>
    --print_filter_stages     Print to STDOUT processed source code before and 
                              after each filter is applied.
    --progress_rate=<n>       Show progress update after every <n> files are
-                             processed (default <n>=1000).
+                             processed (default <n>=100).
    --show_ext[=<ext>]        Print information about all known (or just the
                              given) file extensions and exit.
    --show_lang[=<lang>]      Print information about all known (or just the
@@ -97,9 +97,11 @@ GetOptions(
            "quiet"               => \$opt_quiet               ,
           );
 # Options defaults:
-$opt_progress_rate  = 1000 unless $opt_progress_rate;
-$opt_v          =    0 unless $opt_v;
-die $usage unless defined $opt_show_lang or defined $opt_show_ext or scalar @ARGV >= 1;
+$opt_progress_rate = 100 unless $opt_progress_rate;
+$opt_v             =   0 unless $opt_v;
+die $usage unless defined $opt_show_lang or 
+                  defined $opt_show_ext  or 
+                  scalar @ARGV >= 1;
 # 1}}}
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -153,6 +155,7 @@ foreach my $file (sort keys %unique_source_file) {
     printf "Counting:  %d\r", $nCounted unless $nCounted % $opt_progress_rate;
     next if $Ignored{$file};
     my $basename = basename $file;
+
     if (!defined $Filters_by_Language{$Language{$file}} or
         $Not_Code_Filename{$basename}                   or
         $file =~ m{~$}) {   # file name ends with ~  (a temp edit file)
@@ -234,16 +237,23 @@ sub print_report { # {{{1
                                  $rhh_count->{$a}{'code'}
                                }
                           keys %{$rhh_count}) {
-        die "No scale factor for $language"
-            unless defined $rh_scale->{$language};
-        my $scaled = $rh_scale->{$language}*$rhh_count->{$language}{'code'};
+        my $factor = 1;
+        if (defined $rh_scale->{$language}) {
+            $factor = $rh_scale->{$language};
+        } else {
+            if ($language eq 'MATLAB or Objective C') {
+            } else {
+                warn "No scale factor for $language; using 1.00";
+            }
+        }
+        my $scaled = $factor*$rhh_count->{$language}{'code'};
         printf "%-13s %9d %9d %9d %9d x %6.2f = %14.2f\n",
             $language                         ,
             $rhh_count->{$language}{'nFiles'} ,
             $rhh_count->{$language}{'blank'}  ,
             $rhh_count->{$language}{'comment'},
             $rhh_count->{$language}{'code'}   ,
-            $rh_scale->{$language}            ,
+            $factor                           ,
             $scaled                           ;
         $sum_files   += $rhh_count->{$language}{'nFiles'} ;
         $sum_blank   += $rhh_count->{$language}{'blank'}  ;
@@ -293,7 +303,7 @@ sub print_language_info { # {{{1
     }
     if (%extensions) {
         foreach my $lang (sort {lc $a cmp lc $b } keys %extensions) {
-            printf "%-20s (%s)\n", $lang, join(", ", @{$extensions{$lang}});
+            printf "%-24s (%s)\n", $lang, join(", ", @{$extensions{$lang}});
         }
     }
 } # 1}}}
@@ -454,7 +464,22 @@ sub classify_file { # {{{1
         my $extension = $1;
         return $language if $Not_Code_Extensions{$extension}; # (unknown)
         if (defined $Language_by_Extension{$extension}) {
-            return $Language_by_Extension{$extension};
+            if ($Language_by_Extension{$extension} eq
+                'MATLAB or Objective C') {
+                my $lang_M_or_O = "";
+                matlab_or_objective_C($full_file , 
+                                      $rh_Err    ,
+                                      $raa_errors, 
+                                     \$lang_M_or_O);
+                if ($lang_M_or_O) {
+                    return $lang_M_or_O;
+                } else { # an error happened in matlab_or_objective_C()
+                    $rh_ignored->{$full_file} = 1;
+                    return $language; # (unknown)
+                }
+            } else {
+                return $Language_by_Extension{$extension};
+            }
         } else {
             return $language; # (unknown)
         }
@@ -812,7 +837,7 @@ sub set_constants { # $rh_Error_Codes  {{{1
             'F90'         => 'Fortran 90'            ,
             'F95'         => 'Fortran 95'            ,
             "pfo"         => 'Fortran 77'            ,
-            'm'           => 'MATLAB'                ,
+            'm'           => 'MATLAB or Objective C' ,
             'p'           => 'Pascal'                ,
             'pas'         => 'Pascal'                ,
             'pp'          => 'Pascal'                ,
@@ -841,7 +866,7 @@ sub set_constants { # $rh_Error_Codes  {{{1
             "dtd"         => "DTD"                   ,
             "xsd"         => "XSD"                   ,
             "cfm"         => "ColdFusion"            ,
-            "focexec"     => "focus"                 ,
+            "focexec"     => "Focus"                 ,
             "adso"        => "adso"                  ,
             "vba"         => "Visual Basic"          ,
             "vb"          => "Visual Basic"          ,
@@ -865,6 +890,7 @@ sub set_constants { # $rh_Error_Codes  {{{1
             "asp"         => "asp"                   ,
             "asa"         => "asa"                   ,
             'sh'          => "Bourne Shell"          ,
+            'bash'        => "Bourne Shell"          ,
             'awk'         => 'awk'                   ,
             'tcl'         => 'Tcl/Tk'                ,
             'tk'          => 'Tcl/Tk'                ,
@@ -872,7 +898,6 @@ sub set_constants { # $rh_Error_Codes  {{{1
             'csh'         => 'C Shell'               ,
             'tcsh'        => 'C Shell'               ,
             'ksh'         => 'Korn Shell'            ,
-            'bash'        => 'Bourne Again Shell'    ,
             'java'        => 'Java'                  ,
             'el'          => 'Lisp'                  ,
             'scm'         => 'Lisp'                  ,
@@ -903,11 +928,12 @@ sub set_constants { # $rh_Error_Codes  {{{1
 %{$rh_Language_by_Script} = ( # {{{1
             'sh'       => 'Bourne Shell'          ,
             'awk'      => 'awk'                   ,
+            'sed'      => 'sed'                   ,
             'tcl'      => 'Tcl/Tk'                ,
             'csh'      => 'C Shell'               ,
             'tcsh'     => 'C Shell'               ,
             'ksh'      => 'Korn Shell'            ,
-            'bash'     => 'Bourne Again Shell'    ,
+            'bash'     => 'Bourne Shell'          ,# Bourne Again Shell too long
             'perl'     => 'Perl'                  ,
             'perl5'    => 'Perl'                  ,
             'octave'   => 'Octave'                ,
@@ -928,7 +954,7 @@ sub set_constants { # $rh_Error_Codes  {{{1
                                 [ 'remove_matches'      , '^\s*//' ], ],
     'COBOL'              => [   [ 'remove_cobol_comments',         ], ],
     'ColdFusion'         => [   [ 'remove_html_comments',          ], ],
-    'Crystal Report'     => [   [ 'remove_matches'      , '^\s*//' ],
+    'Crystal Report'     => [   [ 'remove_matches'      , '^\s*//' ], ],
     'DTD'                => [   [ 'remove_html_comments',          ], ],
     'Expect'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'Focus'              => [   [ 'remove_matches'      , '^\s*\-\*'  ], ],
@@ -946,6 +972,8 @@ sub set_constants { # $rh_Error_Codes  {{{1
     'Lisp'               => [   [ 'remove_matches'      , '^\s*;'  ], ],
     'Make'               => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'MATLAB'             => [   [ 'remove_matches'      , '^\s*%'  ], ], 
+    'Objective C'        => [   [ 'remove_c_comments'   ,          ], ], 
+    'MATLAB or Objective C' => [ [ 'die' ,          ], ], # never called
     'Octave'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'Oracle Forms'       => [   [ 'remove_c_comments'   ,          ], ],
     'Oracle Reports'     => [   [ 'remove_c_comments'   ,          ], ],
@@ -953,7 +981,7 @@ sub set_constants { # $rh_Error_Codes  {{{1
     'Perl'               => [   [ 'remove_below'        , '^__(END|DATA)__'],
                                 [ 'remove_matches'      , '^\s*#'  ], ], 
     'Python'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
-    'PHP'                => [   [ 'remove_matches'      , '^\s*#'  ], ], 
+    'PHP'                => [   [ 'remove_matches'      , '^\s*#'  ],
                                 [ 'remove_matches'      , '^\s*//' ], 
                                 [ 'remove_c_comments'   ,          ], ],
     'Rexx'               => [   [ 'remove_c_comments'   ,          ], ],
@@ -964,7 +992,6 @@ sub set_constants { # $rh_Error_Codes  {{{1
     'Bourne Shell'       => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'C Shell'            => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'Korn Shell'         => [   [ 'remove_matches'      , '^\s*#'  ], ], 
-    'Bourne Again Shell' => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'Tcl/Tk'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'Visual Basic'       => [   [ 'remove_matches'      , '^\s*\47'], ],  # \47 = octal for '
     );
@@ -1244,7 +1271,7 @@ sub set_constants { # $rh_Error_Codes  {{{1
     'flavors'                      =>   2.76,
     'flex'                         =>   1.74,
     'flexgen'                      =>   2.76,
-    'focus'                        =>   1.90,
+    'Focus'                        =>   1.90,
     'foil'                         =>   1.51,
     'forte'                        =>   4.44,
     'forth'                        =>   1.25,
@@ -1393,7 +1420,7 @@ sub set_constants { # $rh_Error_Codes  {{{1
     'object logo'                  =>   2.76,
     'object pascal'                =>   2.76,
     'object star'                  =>   5.00,
-    'objectivec'                   =>   2.96,
+    'Objective C'                  =>   2.96,
     'objectoriented default'       =>   2.76,
     'objectview'                   =>   3.20,
     'ogl'                          =>   1.00,
@@ -1402,8 +1429,8 @@ sub set_constants { # $rh_Error_Codes  {{{1
     'ops'                          =>   1.74,
     'ops5'                         =>   1.38,
     'oracle'                       =>   2.76,
-'Oracle Reports'  =>   2.76,
-'Oracle Forms'    =>   2.67,
+    'Oracle Reports'               =>   2.76,
+    'Oracle Forms'                 =>   2.67,
     'Oracle Developer/2000'        =>   3.48,
     'oscar'                        =>   0.75,
     'pacbase'                      =>   1.67,
@@ -1489,8 +1516,6 @@ sub set_constants { # $rh_Error_Codes  {{{1
     'sequal'                       =>   6.67,
       'Bourne Shell'               =>   3.81,
       'ksh'                        =>   3.81,
-      'Bourne Again Shell'         =>   3.81,
-      'C Shell'                    =>   3.81,
       'C Shell'                    =>   3.81,
     'siebel tools '                =>   6.15,
     'simplan'                      =>   2.22,
@@ -2418,10 +2443,13 @@ sub call_regexp_common { # {{{1
     # otherwise get:
     #  Global symbol "%RE" requires explicit package name at cloc line xx.
     if ($all_lines =~ $RE{comment}{$language}) {
-        # $1 is undefined if there's a bug in the $RE
-        # Happens with this Pascal comment for example:
+        # Suppress "Use of uninitialized value in regexp compilation" that
+        # pops up when $1 is undefined--happens if there's a bug in the $RE
+        # This Pascal comment will trigger it:
         #         (* This is { another } test. **)
-        # However, testing for "defined $1" breaks the substitution.
+        # Curiously, testing for "defined $1" breaks the substitution.
+        no warnings; 
+
         $all_lines =~ s/$1//g;
     }
     # a bogus use of %RE to avoid:
@@ -2436,6 +2464,63 @@ sub plural_form { # {{{1
     my $n = shift @_;
     if ($n == 1) { return ( 1, "" ); }
     else         { return ($n, "s"); }
+} # 1}}}
+sub matlab_or_objective_C { # {{{1
+    my ($file        , # in
+        $rh_Err      , # in   hash of error codes
+        $raa_errors  , # out
+        $rs_language , # out
+       ) = @_;
+
+    print "-> matlab_or_objective_C\n" if $opt_v > 2;
+    # matlab markers:
+    #   first line starts with "function"
+    #   some lines start with "%"
+    #
+    # Objective C markers:
+    #   has /* ... */ style comments
+    #   some lines start with @
+    #   some lines start with #include
+
+    ${$rs_language} = "";
+    my $IN = new IO::File $file, "r";
+    if (!defined $IN) {
+        push @{$raa_errors}, [$rh_Err->{'UNABLE_TO_READ'} , $file];
+        return;
+    }
+
+    my $matlab_points      = 0;
+    my $objective_C_points = 0;
+    while (<$IN>) {
+        if      (m{^\s*/\*}) {           #   /*
+            ++$objective_C_points;
+            --$matlab_points;
+        } elsif (m{^\s*#include}) {
+            ++$objective_C_points;
+            --$matlab_points;
+        } elsif (m{^\s*@(interface|implementation|protocol|public|protected|private|end)\s}o) {
+            # Objective C without a doubt
+            $objective_C_points = 1;
+            $matlab_points      = 0;
+            last;
+        } elsif (m{^\s*function}) {
+            --$objective_C_points;
+            ++$matlab_points;
+        } elsif (m{^\s*%}) {              #   %
+            --$objective_C_points;
+            ++$matlab_points;
+        }
+    }
+    $IN->close;
+
+    print "<- matlab_or_objective_C(M=$matlab_points, C=$objective_C_points)\n"
+        if $opt_v > 2;
+    if ($matlab_points > $objective_C_points) {
+        ${$rs_language} = "MATLAB";
+    } else {
+        ${$rs_language} = "Objective C";
+    }
+
 } # 1}}}
 
 # subroutines copied from SLOCCount
