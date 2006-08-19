@@ -359,7 +359,7 @@ sub make_file_list { # {{{1
 
     my $nFiles_Categorized = 0;
     foreach my $file (@file_list) {
-printf "classification of $file\n" if $opt_v > 2;
+        printf "classifying $file\n" if $opt_v > 2;
         my $size_in_bytes = (stat $file)[7];
 
         my $language      = classify_file($file      ,
@@ -373,7 +373,8 @@ die  "make_file_list($file) undef lang" unless defined $language;
         printf "Categorized %8d files\r", 
             $nFiles_Categorized unless $nFiles_Categorized % $opt_progress_rate;
     }
-    printf "Categorized %8d files\n", $nFiles_Categorized;
+    printf "Categorized %8d files\n", $nFiles_Categorized 
+        if !$opt_quiet and $nFiles_Categorized > 1;
 
     return $fh;   # handle to the file containing the list of files to process
 }  # 1}}}
