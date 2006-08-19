@@ -1,9 +1,8 @@
 #!/usr/bin/env perl
-my $VERSION = 0.6;
- 
 # cloc -- Count Lines of Code {{{1
 # Copyright (C) 2006 Northrop Grumman Corporation
 # Author:  Al Danial <al.danial@gmail.com>
+#          First release August 2006
 #
 # Includes code from:
 #   - SLOCCount v2.26 
@@ -28,6 +27,7 @@ my $VERSION = 0.6;
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 # 1}}}
+my $VERSION = 0.6;
 require 5.006;
 use warnings;
 use strict;
@@ -40,12 +40,10 @@ use Digest::MD5;                    # not in standard distribution
 use Text::Tabs qw { expand };
 #use Data::Dumper::Simple;
 
-$| = 1;  # flush stdout
-
-# Usage information, options processing {{{1
+# Usage information, options processing.       {{{1
 my $script = basename $0;
 my $usage  = "
-Usage: $script [options] <file(s)/dir(s)>
+Usage: $script [options] <file(s)/dir(s)> | <report files>
 
  Count physical lines of source code in the given files and/or
  recursively below the given directories.
@@ -59,27 +57,34 @@ Usage: $script [options] <file(s)/dir(s)>
                              after each filter is applied.
    --progress_rate=<n>       Show progress update after every <n> files are
                              processed (default <n>=100).
+   --report_file=<file>      Write the results to <file> instead of STDOUT.
    --show_ext[=<ext>]        Print information about all known (or just the
                              given) file extensions and exit.
    --show_lang[=<lang>]      Print information about all known (or just the
                              given) languages and exit.
    --strip_blanks            Print to STDOUT the input file(s) after blank
                              lines have been removed
-   --strip_comments          Print to STDOUT the input file(s) after blank
-                             lines and comments have been removed.
+   --strip_comments=<ext>    For each file processed, write to the current
+                             directory a version of the file which has blank
+                             lines and comments removed.  The name of each
+                             stripped file is the original file name with 
+                             .<ext> appended to it.
+   --sum_reports             Input arguments are report files previously
+                             created with the --report_file option.  Makes
+                             a cummulative set of results containing the
+                             sum of data from the individual report files.
    --quiet                   Suppress all information messages except for
                              the final report.
    -v[=<n>]                  Verbose switch (optional numeric value).
    --version                 Print the version of this program and exit.
 
 ";
+$| = 1;  # flush STDOUT
+my $start_time = time();
 my ($opt_keep_found, $opt_keep_categorized, $opt_keep_ignored, 
     $opt_keep_counted, $opt_show_ext, $opt_show_lang, $opt_progress_rate, 
     $opt_print_filter_stages, $opt_v, $opt_version, $opt_strip_blanks, 
-    $opt_strip_comments, $opt_quiet,
-    %Error_Codes, %Language_by_Extension, %Language_by_Script,
-    %Filters_by_Language, %Not_Code_Extensions, %Not_Code_Filename,
-    %Scale_Factor,
+    $opt_strip_comments, $opt_quiet, $opt_report_file, $opt_sum_reports,
    );
 GetOptions(
            "keep_found=s"        => \$opt_keep_found          ,
@@ -89,28 +94,32 @@ GetOptions(
            "show_ext:s"          => \$opt_show_ext            ,
            "show_lang:s"         => \$opt_show_lang           ,
            "progress_rate=i"     => \$opt_progress_rate       ,
-           "v:i"                 => \$opt_v                   ,
            "print_filter_stages" => \$opt_print_filter_stages ,
+           "report_file=s"       => \$opt_report_file         ,
            "strip_blanks"        => \$opt_strip_blanks        ,
-           "strip_comments"      => \$opt_strip_comments      ,
-           "version"             => \$opt_version             ,
+           "strip_comments=s"    => \$opt_strip_comments      ,
+           "sum_reports"         => \$opt_sum_reports         ,
            "quiet"               => \$opt_quiet               ,
+           "v:i"                 => \$opt_v                   ,
+           "version"             => \$opt_version             ,
           );
 # Options defaults:
 $opt_progress_rate = 100 unless $opt_progress_rate;
 $opt_v             =   0 unless $opt_v;
-die $usage unless defined $opt_show_lang or 
-                  defined $opt_show_ext  or 
+die $usage unless defined $opt_show_lang or
+                  defined $opt_show_ext  or
                   scalar @ARGV >= 1;
 # 1}}}
-
-# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-# Step 1:  Initialize global constants.
+# Step 1:  Initialize global constants.        {{{1
 #
 my $nFiles_Found               = 0;  # updated in make_file_list
 my $Regexp_Common_Is_Installed = 0;  # installed only if needed
+my (%Error_Codes, %Language_by_Extension, %Language_by_Script,
+    %Filters_by_Language, %Not_Code_Extensions, %Not_Code_Filename,
+    %Scale_Factor,
+   );
 set_constants(               #        Sample values:
-    \%Error_Codes          , # Error_Codes{UNABLE_TO_READ} = -1
+    \%Error_Codes          , # Error_Codes{Unable to read} = -1
     \%Language_by_Extension, # Language_by_Extension{f}    = 'Fortran 77' 
     \%Language_by_Script   , # Language_by_Script{sh}      = 'Bourne Shell'
     \%Filters_by_Language  , # Filters_by_Language{Bourne Shell}[0] = 
@@ -119,34 +128,50 @@ set_constants(               #        Sample values:
     \%Not_Code_Filename    , # Not_Code_Filename{README}   = 1
     \%Scale_Factor         , # Scale_Factor{Perl}          = 4.0
     );
-print_extension_info($opt_show_ext) if defined $opt_show_ext;
-print_language_info($opt_show_lang) if defined $opt_show_lang;
+print_extension_info($opt_show_ext ) if defined $opt_show_ext ;
+print_language_info( $opt_show_lang) if defined $opt_show_lang;
 exit if (defined $opt_show_ext) or (defined $opt_show_lang);
-
-# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-# Step 2:  a) Create a list of every file that might contain source
-#             code.  Ignore binary files, zero-sized files, and
-#             any file in a directory the user says to exclude.
-#          b) Determine the language for each file in the list.
+if ($opt_sum_reports) {
+    my %Results = ();
+    foreach my $type( "by language", "by report file" ) {
+        combine_results(\@ARGV, $type, \%{$Results{ $type }} );
+        my $end_time = time();
+        my @results = generate_report($VERSION, $end_time - $start_time,
+                                      $type,
+                                     \%{$Results{ $type }}, \%Scale_Factor);
+        if ($opt_report_file) {
+            write_file($opt_report_file, \@results);
+        } else {
+            print "\n", join("\n", @results), "\n";
+        }
+    }
+    exit;
+}
+# 1}}}
+# Step 2:  Create a list of files to consider. {{{1
+#  a) Create a list of every file that might contain source
+#     code.  Ignore binary files, zero-sized files, and
+#     any file in a directory the user says to exclude.
+#  b) Determine the language for each file in the list.
 #
 my @Errors    = ();
 my @file_list = ();  # global variable updated in files()
-my %Ignored   = ();  # files that are not counted (language not recognized)
+my %Ignored   = ();  # files that are not counted (language not recognized or
+                     # problems reading the file)
 my $fh = make_file_list(\@ARGV, \%Error_Codes, \@Errors, \%Ignored);
-
-# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-# Step 3:  Remove multiple copies of the same file.
+# 1}}}
+# Step 3:  Remove duplicate files.             {{{1
 #
 my %Language           = ();
 my %unique_source_file = ();
-remove_duplicate_files($fh, \%Language, \%unique_source_file);
-printf "%8d unique file%s.\n", plural_form(scalar keys %unique_source_file) 
+remove_duplicate_files($fh, \%Language   , \%unique_source_file, 
+                            \%Error_Codes, \@Errors , \%Ignored);
+printf "%8d unique file%s.            \n", 
+    plural_form(scalar keys %unique_source_file) 
     unless $opt_quiet;
 exit unless scalar keys %unique_source_file;
-
-# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-# Step 4:  Count the lines of code, comments, and blank lines in
-#          in each source file.
+# 1}}}
+# Step 4:  Count code, comments, blank lines.  {{{1
 #
 my %Results_by_Language = ();
 my $nCounted = 0;
@@ -191,46 +216,117 @@ if ($opt_keep_counted) {
         warn "Unable to write to $opt_keep_counted; skipping.\n";
     }
 }
-
-# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-# Step 5:  Print the results.
+# 1}}}
+# Step 5:  Print results.                      {{{1
 #
+my $end_time = time();
 printf "%8d file%s ignored.\n", plural_form(scalar keys %Ignored) 
     unless $opt_quiet;
-if (@Errors) {
-    printf "%d errors:\n", scalar @Errors;
-    print Dumper(@Errors) if @Errors;
+print_errors(\%Error_Codes, \@Errors) if @Errors;
+my @results = generate_report($VERSION, $end_time - $start_time,
+                              "by language",
+                             \%Results_by_Language, \%Scale_Factor);
+if ($opt_report_file) {
+    write_file($opt_report_file, \@results);
+} else {
+    print "\n", join("\n", @results), "\n";
 }
-print_report($VERSION, \%Results_by_Language, \%Scale_Factor);
+# 1}}}
 
-sub print_report { # {{{1
-    my ($version  , # in
-        $rhh_count, # in  count{language}{nFiles|code|blank|comment}
-        $rh_scale , # in
+sub combine_results {                        # {{{1
+    my ($ra_report_files, # in
+        $report_type    , # in     "by language" or "by report file"
+        $rhh_count      , # out    count{language}{nFiles|code|blank|comment}
        ) = @_;
 
-    my $URL   = "http://cloc.sourceforge.net";
-#   my $eq    = "=" x 10;
-#   my $title = sprintf "%s cloc version %5.2f %s %s %s", 
-#                       $eq, $version, $eq, $URL, $eq;
-    my $eq    = "=" x 32;
-    my $title = sprintf "cloc version %5.2f %s %s", 
-                        $version, $eq, $URL;
-    printf "%s\n%-13s %9s %9s %9s %9s %8s   %14s\n",
-        $title          ,
-        "Language"      ,
+    foreach my $file (@{$ra_report_files}) {
+        my $IN = new IO::File $file, "r";
+        if (!defined $IN) {
+            warn "Unable to read $file; ignoring.\n";
+            next;
+        }
+        while (<$IN>) {
+            next if /^(http|Language|SUM|-----)/;
+            if (m{^(.*?)\s+         # language
+                   (\d+)\s+         # files
+                   (\d+)\s+         # blank
+                   (\d+)\s+         # comments
+                   (\d+)\s+         # code
+                   x\s+             # x
+                   \d+\.\d+\s+      # scale
+                   =\s+             # =
+                   \d+\.\d+\s*      # scaled code
+                   $}x) {
+                if ($report_type eq "by language") {
+                    $rhh_count->{$1   }{'nFiles'}  += $2;
+                    $rhh_count->{$1   }{'blank'}   += $3;
+                    $rhh_count->{$1   }{'comment'} += $4;
+                    $rhh_count->{$1   }{'code'}    += $5;
+                } else {
+                    $rhh_count->{$file}{'nFiles'}  += $2;
+                    $rhh_count->{$file}{'blank'}   += $3;
+                    $rhh_count->{$file}{'comment'} += $4;
+                    $rhh_count->{$file}{'code'}    += $5;
+                }
+            }
+        }
+    }
+
+} # 1}}}
+sub generate_report {                        # {{{1
+    # returns an array of lines containing the results
+    my ($version    , # in
+        $elapsed_sec, # in
+        $report_type, # in  "by language" or "by report file"
+        $rhh_count  , # in  count{language}{nFiles|code|blank|comment}
+        $rh_scale   , # in
+       ) = @_;
+
+    my @results       = ();
+
+    my $sum_files     = 0;
+    my $sum_code      = 0;
+    my $sum_blank     = 0;
+    my $sum_comment   = 0;
+    foreach my $language (keys %{$rhh_count}) {
+        $sum_files   += $rhh_count->{$language}{'nFiles'} ;
+        $sum_blank   += $rhh_count->{$language}{'blank'}  ;
+        $sum_comment += $rhh_count->{$language}{'comment'};
+        $sum_code    += $rhh_count->{$language}{'code'}   ;
+    }
+    my $sum_lines = $sum_blank + $sum_comment + $sum_code;
+    $elapsed_sec = 0.5 unless $elapsed_sec;
+
+    my $URL        = "http://cloc.sourceforge.net";
+    my $eq         = "=" x 32;
+    my $hypen_line = sprintf "%s", '-' x 79;
+
+    push @results,
+    sprintf "%s v %4.2f  T=%.1f s (%.1f files/s, %.1f lines/s)",
+        $URL, $version,
+        $elapsed_sec           ,
+        $sum_files/$elapsed_sec,
+        $sum_lines/$elapsed_sec;
+
+    push @results, $hypen_line;
+
+    my $first_column;
+    if ($report_type eq "by language") {
+        $first_column = "Language";
+    } else {
+        $first_column = "Report File";
+    }
+    push @results,
+    sprintf "%-13s %9s %9s %9s %9s %8s   %14s",
+        $first_column   ,
         "files"         ,
         "blank"         ,
         "comments"      ,
         "code"          ,
         "scale"         ,
         "3rd gen. equiv";
-    print '-' x 79, "\n";
+    push @results, $hypen_line;
 
-    my $sum_files     = 0;
-    my $sum_code      = 0;
-    my $sum_blank     = 0;
-    my $sum_comment   = 0;
     my $sum_scaled    = 0;
     foreach my $language (sort {
                                  $rhh_count->{$b}{'code'} <=>
@@ -247,7 +343,8 @@ sub print_report { # {{{1
             }
         }
         my $scaled = $factor*$rhh_count->{$language}{'code'};
-        printf "%-13s %9d %9d %9d %9d x %6.2f = %14.2f\n",
+        push @results,
+        sprintf "%-13s %9d %9d %9d %9d x %6.2f = %14.2f",
             $language                         ,
             $rhh_count->{$language}{'nFiles'} ,
             $rhh_count->{$language}{'blank'}  ,
@@ -255,14 +352,11 @@ sub print_report { # {{{1
             $rhh_count->{$language}{'code'}   ,
             $factor                           ,
             $scaled                           ;
-        $sum_files   += $rhh_count->{$language}{'nFiles'} ;
-        $sum_blank   += $rhh_count->{$language}{'blank'}  ;
-        $sum_comment += $rhh_count->{$language}{'comment'};
-        $sum_code    += $rhh_count->{$language}{'code'}   ;
         $sum_scaled  += $scaled;
     }
-    print '-' x 79, "\n";
-    printf "%-13s %9d %9d %9d %9d %10s %14.2f\n",
+    push @results, $hypen_line;
+    push @results,
+    sprintf "%-13s %9d %9d %9d %9d %10s %14.2f",
         "SUM:"       ,
         $sum_files   ,
         $sum_blank   ,
@@ -270,8 +364,27 @@ sub print_report { # {{{1
         $sum_code    ,
         ' '          ,
         $sum_scaled  ;
+    push @results, $hypen_line;
+
+    return @results;
 } # 1}}}
-sub print_extension_info { # {{{1
+sub print_errors {                           # {{{1
+    my ($rh_Error_Codes, # in
+        $raa_errors    , # in
+       ) = @_;
+
+    my %error_string = reverse(%{$rh_Error_Codes});
+    my $nErrors      = scalar @{$raa_errors};
+    printf "\n%d error%s:\n", plural_form(scalar @Errors);
+    for (my $i = 0; $i < $nErrors; $i++) {
+        printf "%s:  %s\n", 
+            $error_string{ $raa_errors->[$i][0] },
+            $raa_errors->[$i][1] ;
+    }
+    print "\n";
+
+} # 1}}}
+sub print_extension_info {                   # {{{1
     my ($extension,) = @_;
     if ($extension) {  # show information on this extension
         foreach my $ext (sort {lc $a cmp lc $b } keys %Language_by_Extension) {
@@ -286,7 +399,7 @@ sub print_extension_info { # {{{1
         }
     }
 } # 1}}}
-sub print_language_info { # {{{1
+sub print_language_info {                    # {{{1
     my ($language,) = @_;
     my %extensions = (); # the subset matched by the given $language value
     if ($language) {  # show information on this language
@@ -307,7 +420,7 @@ sub print_language_info { # {{{1
         }
     }
 } # 1}}}
-sub make_file_list { # {{{1
+sub make_file_list {                         # {{{1
     my ($ra_arg_list,  # in   file and/or directory names to examine
         $rh_Err     ,  # in   hash of error codes
         $raa_errors ,  # out  errors encountered
@@ -329,7 +442,7 @@ sub make_file_list { # {{{1
 #print "make_file_list file_or_dir=$file_or_dir\n";
         my $size_in_bytes = 0;
         if (!-r $file_or_dir) {
-            push @{$raa_errors}, [$rh_Err->{'UNABLE_TO_READ'} , $file_or_dir];
+            push @{$raa_errors}, [$rh_Err->{'Unable to read'} , $file_or_dir];
             next;
         }
         if      (is_file($file_or_dir)) {
@@ -342,7 +455,7 @@ sub make_file_list { # {{{1
         } elsif (is_dir ($file_or_dir)) {
             push @dir_list, $file_or_dir;
         } else {
-            push @{$raa_errors}, [$rh_Err->{'NOT_FILE_NOT_DIR'} , $file_or_dir];
+            push @{$raa_errors}, [$rh_Err->{'Neither file nor directory'} , $file_or_dir];
         }
     }
     foreach my $dir (@dir_list) {
@@ -370,18 +483,21 @@ die  "make_file_list($file) undef size" unless defined $size_in_bytes;
 die  "make_file_list($file) undef lang" unless defined $language;
         printf $fh "%d,%s,%s\n", $size_in_bytes, $language, $file;
         ++$nFiles_Categorized;
-        printf "Categorized %8d files\r", 
+        printf "classified %d files\r", 
             $nFiles_Categorized unless $nFiles_Categorized % $opt_progress_rate;
     }
-    printf "Categorized %8d files\n", $nFiles_Categorized 
+    printf "classified %d files\r", $nFiles_Categorized 
         if !$opt_quiet and $nFiles_Categorized > 1;
 
     return $fh;   # handle to the file containing the list of files to process
 }  # 1}}}
-sub remove_duplicate_files { # {{{1
+sub remove_duplicate_files {                 # {{{1
     my ($fh                   , # in 
         $rh_Language          , # out
         $rh_unique_source_file, # out
+        $rh_Err               , # in
+        $raa_errors           , # out  errors encountered
+        $rh_ignored           , # out
         ) = @_;
 
     # Check for duplicate files by comparing file sizes.
@@ -398,21 +514,25 @@ sub remove_duplicate_files { # {{{1
         push @{$files_by_size{$size_in_bytes}}, $file;
     }
     if ($n > $opt_progress_rate) {
-        printf "Duplicate file check %d files (%d known unique)\n", 
+        printf "Duplicate file check %d files (%d known unique)\r", 
             $n, scalar keys %files_by_size;
     }
     $n = 0;
     foreach my $bytes (sort {$a <=> $b} keys %files_by_size) {
         ++$n;
-        printf "Unique: %8d files\r", $n unless $n % $opt_progress_rate;
+        printf "Unique: %8d files                               \r", 
+            $n unless $n % $opt_progress_rate;
         $rh_unique_source_file->{$files_by_size{$bytes}[0]} = 1;
         next unless scalar @{$files_by_size{$bytes}} > 1;
-        foreach my $F (different_files( @{$files_by_size{$bytes}} )) {
+        foreach my $F (different_files(\@{$files_by_size{$bytes}},
+                                        $rh_Err     ,
+                                        $raa_errors ,
+                                        $rh_ignored ) ) {
             $rh_unique_source_file->{$F} = 1;
         }
     }
 } # 1}}}
-sub files { # {{{1
+sub files {                                  # {{{1
     # invoked by File::Find's find()   Populates global variable @file_list
     my $nBytes = -s     $_ ;
     if (!$nBytes and $opt_v > 5) {
@@ -428,7 +548,7 @@ sub files { # {{{1
     printf "%8d files\r", $nFiles_Found unless $nFiles_Found % $opt_progress_rate;
     push @file_list, $File::Find::name;
 } # 1}}}
-sub is_file { # {{{1
+sub is_file {                                # {{{1
     # portable method to test if item is a file
     # (-f doesn't work in ActiveState Perl on Windows)
     my $item = shift @_;
@@ -438,7 +558,7 @@ sub is_file { # {{{1
     if ($mode & 0100000) { return 1; } 
     else                 { return 0; }
 } # 1}}}
-sub is_dir { # {{{1
+sub is_dir {                                 # {{{1
     # portable method to test if item is a directory
     # (-d doesn't work in ActiveState Perl on Windows)
     my $item = shift @_;
@@ -448,7 +568,7 @@ sub is_dir { # {{{1
     if ($mode & 0040000) { return 1; } 
     else                 { return 0; }
 } # 1}}}
-sub classify_file { # {{{1
+sub classify_file {                          # {{{1
     my ($full_file   , # in
         $rh_Err      , # in   hash of error codes
         $raa_errors  , # out
@@ -502,7 +622,7 @@ sub classify_file { # {{{1
     print "<- classify_file($full_file)\n" if $opt_v > 2;
     return $language;
 } # 1}}}
-sub peek_at_first_line { # {{{1
+sub peek_at_first_line {                     # {{{1
     my ($file        , # in
         $rh_Err      , # in   hash of error codes
         $raa_errors  , # out
@@ -512,12 +632,12 @@ sub peek_at_first_line { # {{{1
 
     my $script_language = "";
     if (!-r $file) {
-        push @{$raa_errors}, [$rh_Err->{'UNABLE_TO_READ'} , $file];
+        push @{$raa_errors}, [$rh_Err->{'Unable to read'} , $file];
         return $script_language;
     }
     my $IN = new IO::File $file, "r";
     if (!defined $IN) {
-        push @{$raa_errors}, [$rh_Err->{'UNABLE_TO_READ'} , $file];
+        push @{$raa_errors}, [$rh_Err->{'Unable to read'} , $file];
         print "<- peek_at_first_line($file)\n" if $opt_v > 2;
         return $script_language;
     }
@@ -541,30 +661,35 @@ sub peek_at_first_line { # {{{1
     print "<- peek_at_first_line($file)\n" if $opt_v > 2;
     return $script_language;
 } # 1}}}
-sub different_files { # {{{1
-    # See which of the given files are unique by computing each files MD5
+sub different_files {                        # {{{1
+    # See which of the given files are unique by computing each file's MD5
     # sum.  Return the subset of files which are unique.
-    my (@files) = @_;
+    my ($ra_files    , # in
+        $rh_Err      , # in
+        $raa_errors  , # out
+        $rh_ignored  , # out
+       ) = @_;
 
-    print "-> different_files(@files)\n" if $opt_v > 2;
+    print "-> different_files(@{$ra_files})\n" if $opt_v > 2;
     my %file_hash = ();  # file_hash{ md5 hash } = file name
-    foreach my $F (@files) {
+    foreach my $F (@{$ra_files}) {
         next if is_dir($F);  # needed for Windows
         my $IN = new IO::File $F, "r";
         if (!defined $IN) {
-            warn "different_files:  unable to read $F";
-            next;
+            push @{$raa_errors}, [$rh_Err->{'Unable to read'} , $F];
+            $rh_ignored->{$F} = 1;
+        } else {
+            binmode $IN;
+#           $file_hash{ $F } = $F;
+            $file_hash{ Digest::MD5->new->addfile($IN)->hexdigest } = $F;
+            $IN->close;
         }
-        binmode $IN;
-#       $file_hash{ $F } = $F;
-        $file_hash{ Digest::MD5->new->addfile($IN)->hexdigest } = $F;
-        $IN->close;
     }
     my @unique = values %file_hash;
     print "<- different_files(@unique)\n" if $opt_v > 2;
     return @unique;
 } # 1}}}
-sub call_counter { # {{{1
+sub call_counter {                           # {{{1
     my ($file    , # in
         $language, # in
        ) = @_;
@@ -622,13 +747,33 @@ sub call_counter { # {{{1
             if $opt_print_filter_stages;
     }
     my $comment_lines = $total_lines - $blank_lines - scalar  @lines;
-    print join("\n", @lines), "\n" if $opt_strip_comments;
+    if ($opt_strip_comments) {
+        my $stripped_file = basename $file . ".$opt_strip_comments";
+        write_file($stripped_file, \@lines);
+    }
 
     print "<- call_counter($total_lines, $blank_lines, $comment_lines)\n" 
         if $opt_v > 2;
     return ($total_lines, $blank_lines, $comment_lines);
 } # 1}}}
-sub remove_c_comments { # {{{1
+sub write_file {                             # {{{1
+    my ($file    , # in
+        $ra_lines, # in
+       ) = @_;
+
+    print "-> write_file($file)\n" if $opt_v > 2;
+
+    my $OUT = new IO::File $file, "w";
+    if (defined $OUT) {
+        print $OUT join("\n", @{$ra_lines}), "\n";
+        $OUT->close;
+    } else {
+        warn "Unable to write to $file\n";
+    }
+    
+    print "<- write_file\n" if $opt_v > 2;
+} # 1}}}
+sub remove_c_comments {                      # {{{1
     my ($ra_lines, ) = @_;
 
     # http://search.cpan.org/~jhi/perl-5.8.0/pod/perlfaq6.pod#How_do_I_use_a_regular_expression_to_strip_C_style_comments_from_a_file%3F
@@ -643,7 +788,7 @@ sub remove_c_comments { # {{{1
     print "<- remove_c_comments\n" if $opt_v > 2;
     return split("\n", $all_lines);
 } # 1}}}
-sub remove_f77_comments { # {{{1
+sub remove_f77_comments {                    # {{{1
     my ($ra_lines, ) = @_;
     print "-> remove_f77_comments\n" if $opt_v > 2;
 
@@ -656,7 +801,7 @@ sub remove_f77_comments { # {{{1
     print "<- remove_f77_comments\n" if $opt_v > 2;
     return @save_lines;
 } # 1}}}
-sub remove_f90_comments { # {{{1
+sub remove_f90_comments {                    # {{{1
     # derived from SLOCCount
     my ($ra_lines, ) = @_;
     print "-> remove_f90_comments\n" if $opt_v > 2;
@@ -675,7 +820,7 @@ sub remove_f90_comments { # {{{1
     print "<- remove_f90_comments\n" if $opt_v > 2;
     return @save_lines;
 } # 1}}}
-sub remove_matches { # {{{1
+sub remove_matches {                         # {{{1
     my ($ra_lines, $pattern, ) = @_;
     print "-> remove_matches(pattern=$pattern)\n" if $opt_v > 2;
 
@@ -688,7 +833,7 @@ sub remove_matches { # {{{1
     print "<- remove_matches\n" if $opt_v > 2;
     return @save_lines;
 } # 1}}}
-sub remove_below { # {{{1
+sub remove_below {                           # {{{1
     my ($ra_lines, $marker, ) = @_;
     print "-> remove_below(marker=$marker)\n" if $opt_v > 2;
 
@@ -701,7 +846,7 @@ sub remove_below { # {{{1
     print "<- remove_below\n" if $opt_v > 2;
     return @save_lines;
 } # 1}}}
-sub remove_cobol_blanks { # {{{1
+sub remove_cobol_blanks {                    # {{{1
     # subroutines derived from SLOCCount
     my ($ra_lines, ) = @_;
 
@@ -719,7 +864,7 @@ sub remove_cobol_blanks { # {{{1
     }
     return @save_lines;
 } # 1}}}
-sub remove_cobol_comments { # {{{1
+sub remove_cobol_comments {                  # {{{1
     # subroutines derived from SLOCCount
     my ($ra_lines, ) = @_;
 
@@ -737,33 +882,7 @@ sub remove_cobol_comments { # {{{1
     }
     return @save_lines;
 } # 1}}}
-##sub remove_html_comments { # {{{1
-##    my ($ra_lines, ) = @_;
-##
-##    print "-> remove_html_comments\n" if $opt_v > 2;
-##
-##    my @save_lines = ();
-##    my $in_comment = 0;
-##    foreach (@{$ra_lines}) {
-##        next if /^\s*$/;
-##        s/<\!\-\-.*?\-\->//g;  # strip one-line comments
-##        next if /^\s*$/;
-##        if ($in_comment) {
-##            if (/\-\->/) {
-##                s/^.*?\-\->//;
-##                $in_comment = 0;
-##            }
-##        }
-##        next if /^\s*$/;
-##        $in_comment = 1 if /^(.*?)<\!\-\-/;
-##        next if defined $1 and $1 =~ /^\s*$/;
-##        push @save_lines, $_;
-##    }
-##
-##    print "<- remove_html_comments\n" if $opt_v > 2;
-##    return @save_lines;
-##} # 1}}}
-sub remove_jcl_comments { # {{{1
+sub remove_jcl_comments {                    # {{{1
     my ($ra_lines, ) = @_;
 
     print "-> remove_jcl_comments\n" if $opt_v > 2;
@@ -780,7 +899,7 @@ sub remove_jcl_comments { # {{{1
     print "<- remove_jcl_comments\n" if $opt_v > 2;
     return @save_lines;
 } # 1}}}
-sub print_lines { # {{{1
+sub print_lines {                            # {{{1
     my ($file     , # in
         $title    , # in
         $ra_lines , # in
@@ -791,7 +910,7 @@ sub print_lines { # {{{1
         print "\n" unless $ra_lines->[$i] =~ m{\n$}
     }
 } # 1}}}
-sub set_constants { # $rh_Error_Codes  {{{1
+sub set_constants {                          # {{{1
     my ($rh_Error_Codes           , # out
         $rh_Language_by_Extension , # out
         $rh_Language_by_Script    , # out
@@ -801,11 +920,11 @@ sub set_constants { # $rh_Error_Codes  {{{1
         $rh_Scale_Factor          , # out
        ) = @_;
 %{$rh_Error_Codes} = (
-            'UNABLE_TO_READ'    => -1,
-            'NOT_FILE_NOT_DIR'  => -2,
+            'Unable to read'              => -1,
+            'Neither file nor directory'  => -2,
             );
 # 1}}}
-%{$rh_Language_by_Extension} = ( # {{{1
+%{$rh_Language_by_Extension} = (                 # {{{1
             'ada'         => 'Ada'                   ,
             'adb'         => 'Ada'                   ,
             'ads'         => 'Ada'                   ,
@@ -926,7 +1045,7 @@ sub set_constants { # $rh_Error_Codes  {{{1
             "rex"         => "Rexx"                  ,
             );
 # 1}}}
-%{$rh_Language_by_Script} = ( # {{{1
+%{$rh_Language_by_Script}    = (                 # {{{1
             'sh'       => 'Bourne Shell'          ,
             'awk'      => 'awk'                   ,
             'sed'      => 'sed'                   ,
@@ -941,7 +1060,7 @@ sub set_constants { # $rh_Error_Codes  {{{1
             'make'     => 'Make'                  ,
             );
 # 1}}}
-%{$rhaa_Filters_by_Language} = ( # {{{1
+%{$rhaa_Filters_by_Language} = (                 # {{{1
     'ABAP'               => [   [ 'remove_matches'      , '^\*'    ], ],
     'Ada'                => [   [ 'remove_matches'      , '^\s*--' ], ],
     'ADSO'               => [   [ 'remove_matches'      , '^\s*\*[\+\!]' ], ],
@@ -954,9 +1073,9 @@ sub set_constants { # $rh_Error_Codes  {{{1
     'C#'                 => [   [ 'remove_c_comments'   ,          ],
                                 [ 'remove_matches'      , '^\s*//' ], ],
     'COBOL'              => [   [ 'remove_cobol_comments',         ], ],
-    'ColdFusion'         => [   [ 'remove_html_comments',          ], ],
+    'ColdFusion'         => [   [ 'call_regexp_common'  , 'HTML'   ], ],
     'Crystal Report'     => [   [ 'remove_matches'      , '^\s*//' ], ],
-    'DTD'                => [   [ 'remove_html_comments',          ], ],
+    'DTD'                => [   [ 'call_regexp_common'  , 'HTML'   ], ],
     'Expect'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'Focus'              => [   [ 'remove_matches'      , '^\s*\-\*'  ], ],
     'Fortran 77'         => [   [ 'remove_f77_comments' ,          ], ],
@@ -997,7 +1116,7 @@ sub set_constants { # $rh_Error_Codes  {{{1
     'Visual Basic'       => [   [ 'remove_matches'      , '^\s*\47'], ],  # \47 = octal for '
     );
 # 1}}}
-%{$rh_Not_Code_Extensions} = ( # {{{1
+%{$rh_Not_Code_Extensions}   = (                 # {{{1
    "1"       => 1,  # Man pages (documentation):
    "2"       => 1,
    "3"       => 1,
@@ -1062,7 +1181,7 @@ sub set_constants { # $rh_Error_Codes  {{{1
    "Z"       => 1,  # file compressed with "compress"
    "zip"     => 1,  # zip archive
 ); # 1}}}
-%{$rh_Not_Code_Filename} = ( # {{{1
+%{$rh_Not_Code_Filename}     = (                 # {{{1
    "README"      => 1,
    "Readme"      => 1,
    "readme"      => 1,
@@ -1083,7 +1202,7 @@ sub set_constants { # $rh_Error_Codes  {{{1
                        # (used in xlockmore):
 );
 # 1}}}
-%{$rh_Scale_Factor} = ( # {{{1
+%{$rh_Scale_Factor}          = (                 # {{{1
     '1032/af'                      =>   5.00,
     '1st generation default'       =>   0.25,
     '2nd generation default'       =>   0.75,
@@ -1639,8 +1758,8 @@ sub set_constants { # $rh_Error_Codes  {{{1
 'sed'     => 4.00,
 );
 # 1}}}
-} # end of sub set_constants()
-sub Install_Regexp_Common { # {{{1
+} # end sub set_constants()
+sub Install_Regexp_Common {                  # {{{1
     # Installs portions of Damian Conway's & Abigail's Regexp::Common
     # module, v2.120, into a temporary directory for the duration of
     # this run.
@@ -2431,7 +2550,7 @@ EOD
     eval "use Regexp::Common qw /comment RE_comment_HTML/";
     $Regexp_Common_Is_Installed = 1 unless $problems;
 } # 1}}}
-sub call_regexp_common { # {{{1
+sub call_regexp_common {                     # {{{1
     my ($ra_lines, $language ) = @_;
 
     Install_Regexp_Common() unless $Regexp_Common_Is_Installed;
@@ -2460,13 +2579,13 @@ sub call_regexp_common { # {{{1
     print "<- call_regexp_common\n" if $opt_v > 2;
     return split("\n", $all_lines);
 } # 1}}}
-sub plural_form { # {{{1
+sub plural_form {                            # {{{1
     # For getting the right plural form on some English nouns.
     my $n = shift @_;
     if ($n == 1) { return ( 1, "" ); }
     else         { return ($n, "s"); }
 } # 1}}}
-sub matlab_or_objective_C { # {{{1
+sub matlab_or_objective_C {                  # {{{1
     my ($file        , # in
         $rh_Err      , # in   hash of error codes
         $raa_errors  , # out
@@ -2486,7 +2605,7 @@ sub matlab_or_objective_C { # {{{1
     ${$rs_language} = "";
     my $IN = new IO::File $file, "r";
     if (!defined $IN) {
-        push @{$raa_errors}, [$rh_Err->{'UNABLE_TO_READ'} , $file];
+        push @{$raa_errors}, [$rh_Err->{'Unable to read'} , $file];
         return;
     }
 
@@ -2525,11 +2644,11 @@ sub matlab_or_objective_C { # {{{1
 } # 1}}}
 
 # subroutines copied from SLOCCount
-my %lex_files = ();     # really_is_lex()
+my %lex_files    = ();  # really_is_lex()
 my %expect_files = ();  # really_is_expect()
 my %pascal_files = ();  # really_is_pascal(), really_is_incpascal()
-my %php_files = ();     # really_is_php()
-sub really_is_lex { # {{{1
+my %php_files    = ();  # really_is_php()
+sub really_is_lex {                          # {{{1
 # Given filename, returns TRUE if its contents really is lex.
 # lex file must have "%%", "%{", and "%}".
 # In theory, a lex file doesn't need "%{" and "%}", but in practice
@@ -2563,7 +2682,7 @@ sub really_is_lex { # {{{1
 
  return $is_lex;
 } # 1}}}
-sub really_is_expect { # {{{1
+sub really_is_expect {                       # {{{1
 # Given filename, returns TRUE if its contents really are Expect.
 # Many "exp" files (such as in Apache and Mesa) are just "export" data,
 # summarizing something else # (e.g., its interface).
@@ -2619,7 +2738,7 @@ sub really_is_expect { # {{{1
 
  return $is_expect;
 } # 1}}}
-sub really_is_pascal { # {{{1
+sub really_is_pascal {                       # {{{1
 # Given filename, returns TRUE if its contents really are Pascal.
 
 # This isn't as obvious as it seems.
@@ -2722,7 +2841,7 @@ sub really_is_pascal { # {{{1
 
  return $is_pascal;
 } # 1}}}
-sub really_is_incpascal { # {{{1
+sub really_is_incpascal {                    # {{{1
 # Given filename, returns TRUE if its contents really are Pascal.
 # For .inc files (mainly seen in fpc)
 
@@ -2766,7 +2885,7 @@ sub really_is_incpascal { # {{{1
  $pascal_files{$filename} = $is_pascal; # Store result in cache.
  return $is_pascal;
 } # 1}}}
-sub really_is_php { # {{{1
+sub really_is_php {                          # {{{1
 # Given filename, returns TRUE if its contents really is php.
 
  my $filename = shift;
