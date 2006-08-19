@@ -27,7 +27,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 # 1}}}
-my $VERSION = 0.6;
+my $VERSION = 0.62;
 require 5.006;
 use warnings;
 use strict;
@@ -140,7 +140,9 @@ if ($opt_sum_reports) {
                                       $type,
                                      \%{$Results{ $type }}, \%Scale_Factor);
         if ($opt_report_file) {
-            write_file($opt_report_file, \@results);
+            my $ext  = ".lang";
+               $ext  = ".file" unless $type eq "by language";
+            write_file($opt_report_file . $ext, \@results);
         } else {
             print "\n", join("\n", @results), "\n";
         }
@@ -235,8 +237,8 @@ if ($opt_report_file) {
 
 sub combine_results {                        # {{{1
     my ($ra_report_files, # in
-        $report_type    , # in     "by language" or "by report file"
-        $rhh_count      , # out    count{language}{nFiles|code|blank|comment}
+        $report_type    , # in  "by language" or "by report file"
+        $rhh_count      , # out count{TYPE}{nFiles|code|blank|comment|scaled}
        ) = @_;
 
     foreach my $file (@{$ra_report_files}) {
@@ -255,18 +257,20 @@ sub combine_results {                        # {{{1
                    x\s+             # x
                    \d+\.\d+\s+      # scale
                    =\s+             # =
-                   \d+\.\d+\s*      # scaled code
+                   (\d+\.\d+)\s*    # scaled code
                    $}x) {
                 if ($report_type eq "by language") {
-                    $rhh_count->{$1   }{'nFiles'}  += $2;
-                    $rhh_count->{$1   }{'blank'}   += $3;
+                    $rhh_count->{$1   }{'nFiles' } += $2;
+                    $rhh_count->{$1   }{'blank'  } += $3;
                     $rhh_count->{$1   }{'comment'} += $4;
-                    $rhh_count->{$1   }{'code'}    += $5;
+                    $rhh_count->{$1   }{'code'   } += $5;
+                    $rhh_count->{$1   }{'scaled' } += $6;
                 } else {
-                    $rhh_count->{$file}{'nFiles'}  += $2;
-                    $rhh_count->{$file}{'blank'}   += $3;
+                    $rhh_count->{$file}{'nFiles' } += $2;
+                    $rhh_count->{$file}{'blank'  } += $3;
                     $rhh_count->{$file}{'comment'} += $4;
-                    $rhh_count->{$file}{'code'}    += $5;
+                    $rhh_count->{$file}{'code'   } += $5;
+                    $rhh_count->{$file}{'scaled' } += $6;
                 }
             }
         }
@@ -278,7 +282,7 @@ sub generate_report {                        # {{{1
     my ($version    , # in
         $elapsed_sec, # in
         $report_type, # in  "by language" or "by report file"
-        $rhh_count  , # in  count{language}{nFiles|code|blank|comment}
+        $rhh_count  , # in  count{TYPE}{nFiles|code|blank|comment|scaled}
         $rh_scale   , # in
        ) = @_;
 
@@ -298,24 +302,26 @@ sub generate_report {                        # {{{1
     $elapsed_sec = 0.5 unless $elapsed_sec;
 
     my $URL        = "http://cloc.sourceforge.net";
-    my $eq         = "=" x 32;
     my $hypen_line = sprintf "%s", '-' x 79;
-
-    push @results,
-    sprintf "%s v %4.2f  T=%.1f s (%.1f files/s, %.1f lines/s)",
-        $URL, $version,
-        $elapsed_sec           ,
-        $sum_files/$elapsed_sec,
-        $sum_lines/$elapsed_sec;
-
-    push @results, $hypen_line;
-
     my $first_column;
+    my $BY_LANGUAGE = 0;
     if ($report_type eq "by language") {
         $first_column = "Language";
+        $BY_LANGUAGE  = 1;
     } else {
         $first_column = "Report File";
     }
+
+    my $header_line  = sprintf "%s v %4.2f", $URL, $version;
+       $header_line .= sprintf("  T=%.1f s (%.1f files/s, %.1f lines/s)",
+        $elapsed_sec           ,
+        $sum_files/$elapsed_sec,
+        $sum_lines/$elapsed_sec) unless $opt_sum_reports;
+
+    push @results, $header_line;
+
+    push @results, $hypen_line;
+
     push @results,
     sprintf "%-13s %9s %9s %9s %9s %8s   %14s",
         $first_column   ,
@@ -327,42 +333,45 @@ sub generate_report {                        # {{{1
         "3rd gen. equiv";
     push @results, $hypen_line;
 
-    my $sum_scaled    = 0;
-    foreach my $language (sort {
+    my $sum_scaled = 0;
+    foreach my $lang_or_file (sort {
                                  $rhh_count->{$b}{'code'} <=>
                                  $rhh_count->{$a}{'code'}
                                }
                           keys %{$rhh_count}) {
-        my $factor = 1;
-        if (defined $rh_scale->{$language}) {
-            $factor = $rh_scale->{$language};
-        } else {
-            if ($language eq 'MATLAB or Objective C') {
+        my ($factor, $scaled);
+        if ($BY_LANGUAGE) {
+            $factor = 1;
+            if (defined $rh_scale->{$lang_or_file}) {
+                $factor = $rh_scale->{$lang_or_file};
             } else {
-                warn "No scale factor for $language; using 1.00";
+                warn "No scale factor for $lang_or_file; using 1.00";
             }
+            $scaled = $factor*$rhh_count->{$lang_or_file}{'code'};
+        } else {
+            $scaled =         $rhh_count->{$lang_or_file}{'scaled'};
+            $factor = $scaled/$rhh_count->{$lang_or_file}{'code'};
         }
-        my $scaled = $factor*$rhh_count->{$language}{'code'};
         push @results,
         sprintf "%-13s %9d %9d %9d %9d x %6.2f = %14.2f",
-            $language                         ,
-            $rhh_count->{$language}{'nFiles'} ,
-            $rhh_count->{$language}{'blank'}  ,
-            $rhh_count->{$language}{'comment'},
-            $rhh_count->{$language}{'code'}   ,
+            $lang_or_file                         ,
+            $rhh_count->{$lang_or_file}{'nFiles'} ,
+            $rhh_count->{$lang_or_file}{'blank'}  ,
+            $rhh_count->{$lang_or_file}{'comment'},
+            $rhh_count->{$lang_or_file}{'code'}   ,
             $factor                           ,
             $scaled                           ;
         $sum_scaled  += $scaled;
     }
     push @results, $hypen_line;
     push @results,
-    sprintf "%-13s %9d %9d %9d %9d %10s %14.2f",
+    sprintf "%-13s %9d %9d %9d %9d x %6.2f = %14.2f",
         "SUM:"       ,
         $sum_files   ,
         $sum_blank   ,
         $sum_comment ,
         $sum_code    ,
-        ' '          ,
+        $sum_scaled / $sum_code,  # weighted average of scale factors
         $sum_scaled  ;
     push @results, $hypen_line;
 
@@ -770,6 +779,7 @@ sub write_file {                             # {{{1
     } else {
         warn "Unable to write to $file\n";
     }
+    print "Wrote $file\n";
     
     print "<- write_file\n" if $opt_v > 2;
 } # 1}}}
