@@ -142,7 +142,7 @@ if ($opt_sum_reports) {
         if ($opt_report_file) {
             my $ext  = ".lang";
                $ext  = ".file" unless $type eq "by language";
-            write_file($opt_report_file . $ext, \@results);
+            write_file($opt_report_file . $ext, @results);
         } else {
             print "\n", join("\n", @results), "\n";
         }
@@ -200,24 +200,8 @@ foreach my $file (sort keys %unique_source_file) {
     $Results_by_Language{$Language{$file}}{'blank'}   += $blank_count;
     $Results_by_Language{$Language{$file}}{'comment'} += $comment_count;
 }
-if ($opt_keep_ignored) {
-    my $OUT = new IO::File $opt_keep_ignored, "w";
-    if (defined $OUT) {
-        print $OUT join("\n", sort keys %Ignored), "\n";
-        $OUT->close;
-    } else {
-        warn "Unable to write to $opt_keep_ignored; skipping.\n";
-    }
-}
-if ($opt_keep_counted) {
-    my $OUT = new IO::File $opt_keep_counted, "w";
-    if (defined $OUT) {
-        print $OUT join("\n", sort keys %Language), "\n";
-        $OUT->close;
-    } else {
-        warn "Unable to write to $opt_keep_counted; skipping.\n";
-    }
-}
+write_file($opt_keep_ignored, sort keys %Ignored ) if $opt_keep_ignored;
+write_file($opt_keep_counted, sort keys %Language) if $opt_keep_counted;
 # 1}}}
 # Step 5:  Print results.                      {{{1
 #
@@ -229,7 +213,7 @@ my @results = generate_report($VERSION, $end_time - $start_time,
                               "by language",
                              \%Results_by_Language, \%Scale_Factor);
 if ($opt_report_file) {
-    write_file($opt_report_file, \@results);
+    write_file($opt_report_file, @results);
 } else {
     print "\n", join("\n", @results), "\n";
 }
@@ -473,11 +457,7 @@ sub make_file_list {                         # {{{1
     }
     $nFiles_Found = scalar @file_list;
     printf "%8d text file%s.\n", plural_form($nFiles_Found) unless $opt_quiet;
-    if ($opt_keep_found) {
-        my $OUT = new IO::File $opt_keep_found, "w";
-        print $OUT join("\n", sort @file_list), "\n";
-        $OUT->close;
-    }
+    write_file($opt_keep_found, sort @file_list) if $opt_keep_found;
 
     my $nFiles_Categorized = 0;
     foreach my $file (@file_list) {
@@ -588,6 +568,7 @@ sub classify_file {                          # {{{1
 
     my $language = "(unknown)";
 
+    my $look_at_first_line = 0;
     my $file = basename $full_file; 
     if ($file =~ /\.(\w+)$/) { # has an extension
         print "$full_file extension=[$1]\n" if $opt_v > 2;
@@ -610,10 +591,14 @@ sub classify_file {                          # {{{1
             } else {
                 return $Language_by_Extension{$extension};
             }
-        } else {
-            return $language; # (unknown)
+        } else { # has an unmapped file extension
+            $look_at_first_line = 1;
         }
-    } else {                   # no file extension
+    } else {  # no file extension
+        $look_at_first_line = 1;
+    }
+
+    if ($look_at_first_line) {
         # maybe it is a shell/Perl/Python/Ruby/etc script that
         # starts with pound bang:
         #   #!/usr/bin/perl
@@ -758,7 +743,7 @@ sub call_counter {                           # {{{1
     my $comment_lines = $total_lines - $blank_lines - scalar  @lines;
     if ($opt_strip_comments) {
         my $stripped_file = basename $file . ".$opt_strip_comments";
-        write_file($stripped_file, \@lines);
+        write_file($stripped_file, @lines);
     }
 
     print "<- call_counter($total_lines, $blank_lines, $comment_lines)\n" 
@@ -766,15 +751,15 @@ sub call_counter {                           # {{{1
     return ($total_lines, $blank_lines, $comment_lines);
 } # 1}}}
 sub write_file {                             # {{{1
-    my ($file    , # in
-        $ra_lines, # in
+    my ($file  , # in
+        @lines , # in
        ) = @_;
 
     print "-> write_file($file)\n" if $opt_v > 2;
 
     my $OUT = new IO::File $file, "w";
     if (defined $OUT) {
-        print $OUT join("\n", @{$ra_lines}), "\n";
+        print $OUT join("\n", @lines), "\n";
         $OUT->close;
     } else {
         warn "Unable to write to $file\n";
@@ -973,6 +958,7 @@ sub set_constants {                          # {{{1
             'pp'          => 'Pascal'                ,
             'dpr'         => 'Pascal'                ,
             'pl'          => 'Perl'                  ,
+            'PL'          => 'Perl'                  ,
             'pm'          => 'Perl'                  ,
             'perl'        => 'Perl'                  ,
             'plx'         => 'Perl'                  ,
