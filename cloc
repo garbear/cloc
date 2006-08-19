@@ -39,6 +39,7 @@ use IO::File;
 use Digest::MD5;                    # not in standard distribution
 use Text::Tabs qw { expand };
 #use Data::Dumper::Simple;
+use Data::Dumper;
 
 # Usage information, options processing.       {{{1
 my $script = basename $0;
@@ -183,12 +184,12 @@ foreach my $file (sort keys %unique_source_file) {
     next if $Ignored{$file};
     my $basename = basename $file;
 
-    if (!defined $Filters_by_Language{$Language{$file}} or
-        $Not_Code_Filename{$basename}                   or
-        $file =~ m{~$}) {   # file name ends with ~  (a temp edit file)
-        $Ignored{$file} = 1;
-        next;
-    }
+####if (!defined $Filters_by_Language{$Language{$file}} or
+####    $Not_Code_Filename{$basename}                   or
+####    $file =~ m{~$}) {   # file name ends with ~  (a temp edit file)
+####    $Ignored{$file} = 1;
+####    next;
+####}
     my ($all_line_count,
         $blank_count   ,
         $comment_count ,
@@ -200,7 +201,8 @@ foreach my $file (sort keys %unique_source_file) {
     $Results_by_Language{$Language{$file}}{'blank'}   += $blank_count;
     $Results_by_Language{$Language{$file}}{'comment'} += $comment_count;
 }
-write_file($opt_keep_ignored, sort keys %Ignored ) if $opt_keep_ignored;
+my @ignored_reasons = map { "$_: $Ignored{$_}" } sort keys %Ignored;
+write_file($opt_keep_ignored, @ignored_reasons   ) if $opt_keep_ignored;
 write_file($opt_keep_counted, sort keys %Language) if $opt_keep_counted;
 # 1}}}
 # Step 5:  Print results.                      {{{1
@@ -209,6 +211,7 @@ my $end_time = time();
 printf "%8d file%s ignored.\n", plural_form(scalar keys %Ignored) 
     unless $opt_quiet;
 print_errors(\%Error_Codes, \@Errors) if @Errors;
+exit unless %Results_by_Language;
 my @results = generate_report($VERSION, $end_time - $start_time,
                               "by language",
                              \%Results_by_Language, \%Scale_Factor);
@@ -439,9 +442,11 @@ sub make_file_list {                         # {{{1
             next;
         }
         if      (is_file($file_or_dir)) {
-            if (!(-s $file_or_dir) # avoid named pipes, sockets, 0 sized files
-                or (-B $file_or_dir)) { # avoid binary files
-                $rh_ignored->{$file_or_dir} = 1;
+            if (!(-s $file_or_dir)) {   # 0 sized file, named pipe, socket 
+                $rh_ignored->{$file_or_dir} = 'zero sized file';
+                next;
+            } elsif (-B $file_or_dir) { # avoid binary files
+                $rh_ignored->{$file_or_dir} = 'binary file';
                 next;
             }
             push @file_list, "$file_or_dir";
@@ -449,6 +454,7 @@ sub make_file_list {                         # {{{1
             push @dir_list, $file_or_dir;
         } else {
             push @{$raa_errors}, [$rh_Err->{'Neither file nor directory'} , $file_or_dir];
+            $rh_ignored->{$file_or_dir} = 'not file, not directory';
         }
     }
     foreach my $dir (@dir_list) {
@@ -565,11 +571,13 @@ sub classify_file {                          # {{{1
        ) = @_;
 
     print "-> classify_file($full_file)\n" if $opt_v > 2;
-
     my $language = "(unknown)";
 
     my $look_at_first_line = 0;
     my $file = basename $full_file; 
+    return $language if $Not_Code_Filename{$file}; # (unknown)
+    return $language if $file =~ m{~$}; # a temp edit file (unknown)
+
     if ($file =~ /\.(\w+)$/) { # has an extension
         print "$full_file extension=[$1]\n" if $opt_v > 2;
         my $extension = $1;
@@ -580,12 +588,13 @@ sub classify_file {                          # {{{1
                 my $lang_M_or_O = "";
                 matlab_or_objective_C($full_file , 
                                       $rh_Err    ,
-                                      $raa_errors, 
+                                      $raa_errors,
                                      \$lang_M_or_O);
                 if ($lang_M_or_O) {
                     return $lang_M_or_O;
                 } else { # an error happened in matlab_or_objective_C()
-                    $rh_ignored->{$full_file} = 1;
+                    $rh_ignored->{$full_file} = 
+                        'failure in matlab_or_objective_C()';
                     return $language; # (unknown)
                 }
             } else {
@@ -606,10 +615,21 @@ sub classify_file {                          # {{{1
         my $script_language = peek_at_first_line($full_file , 
                                                  $rh_Err    , 
                                                  $raa_errors);
+        if (!$script_language) {
+            $rh_ignored->{$full_file} = "failed to identify language";
+            # returns (unknown)
+        }
         if (defined $Language_by_Script{$script_language}) {
-            $language = $Language_by_Script{$script_language};
+            if (defined $Filters_by_Language{$script_language}) {
+                $language = $Language_by_Script{$script_language};
+            } else {
+                $rh_ignored->{$full_file} = 
+                    "undefined:  Filters_by_Language{$script_language}";
+                # returns (unknown)
+            }
         } else {
-            $rh_ignored->{$full_file} = 1;
+            $rh_ignored->{$full_file} = 
+                "undefined:  Language_by_Script{$script_language}";
             # returns (unknown)
         }
     }
@@ -671,7 +691,7 @@ sub different_files {                        # {{{1
         my $IN = new IO::File $F, "r";
         if (!defined $IN) {
             push @{$raa_errors}, [$rh_Err->{'Unable to read'} , $F];
-            $rh_ignored->{$F} = 1;
+            $rh_ignored->{$F} = 'cannot read';
         } else {
             binmode $IN;
 #           $file_hash{ $F } = $F;
@@ -1110,6 +1130,8 @@ sub set_constants {                          # {{{1
     'Korn Shell'         => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'Tcl/Tk'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'Visual Basic'       => [   [ 'remove_matches'      , '^\s*\47'], ],  # \47 = octal for '
+    'yacc'               => [   [ 'remove_c_comments'   ,          ], ], 
+    'lex'                => [   [ 'remove_c_comments'   ,          ], ], 
     );
 # 1}}}
 %{$rh_Not_Code_Extensions}   = (                 # {{{1
