@@ -39,7 +39,7 @@ use IO::File;
 use Digest::MD5;                    # not in standard distribution
 use Text::Tabs qw { expand };
 #use Data::Dumper::Simple;
-use Data::Dumper;
+#use Data::Dumper;
 
 # Usage information, options processing.       {{{1
 my $script = basename $0;
@@ -117,12 +117,13 @@ my $nFiles_Found               = 0;  # updated in make_file_list
 my $Regexp_Common_Is_Installed = 0;  # installed only if needed
 my (%Error_Codes, %Language_by_Extension, %Language_by_Script,
     %Filters_by_Language, %Not_Code_Extensions, %Not_Code_Filename,
-    %Scale_Factor,
+    %Language_by_File, %Scale_Factor,
    );
 set_constants(               #        Sample values:
     \%Error_Codes          , # Error_Codes{Unable to read} = -1
     \%Language_by_Extension, # Language_by_Extension{f}    = 'Fortran 77' 
     \%Language_by_Script   , # Language_by_Script{sh}      = 'Bourne Shell'
+    \%Language_by_File     , # Language_by_File{makefile}  = 'Make'
     \%Filters_by_Language  , # Filters_by_Language{Bourne Shell}[0] = 
                              #      [ 'remove_matches' , '^\s*#'  ]
     \%Not_Code_Extensions  , # Not_Code_Extensions{jpg}    = 1
@@ -172,7 +173,6 @@ remove_duplicate_files($fh, \%Language   , \%unique_source_file,
 printf "%8d unique file%s.            \n", 
     plural_form(scalar keys %unique_source_file) 
     unless $opt_quiet;
-exit unless scalar keys %unique_source_file;
 # 1}}}
 # Step 4:  Count code, comments, blank lines.  {{{1
 #
@@ -182,14 +182,16 @@ foreach my $file (sort keys %unique_source_file) {
     ++$nCounted;
     printf "Counting:  %d\r", $nCounted unless $nCounted % $opt_progress_rate;
     next if $Ignored{$file};
+    if (!defined @{$Filters_by_Language{$Language{$file}} }) {
+        if ($Language{$file} eq "(unknown)") {
+            $Ignored{$file} = "language unknown";
+        } else {
+            $Ignored{$file} = "missing Filters_by_Language{$Language{$file}}";
+        }
+        next;
+    }
     my $basename = basename $file;
 
-####if (!defined $Filters_by_Language{$Language{$file}} or
-####    $Not_Code_Filename{$basename}                   or
-####    $file =~ m{~$}) {   # file name ends with ~  (a temp edit file)
-####    $Ignored{$file} = 1;
-####    next;
-####}
     my ($all_line_count,
         $blank_count   ,
         $comment_count ,
@@ -468,8 +470,18 @@ sub make_file_list {                         # {{{1
     my $nFiles_Categorized = 0;
     foreach my $file (@file_list) {
         printf "classifying $file\n" if $opt_v > 2;
-        my $size_in_bytes = (stat $file)[7];
 
+        my $basename = basename $file;
+        if ($Not_Code_Filename{$basename}) {
+            $rh_ignored->{$file} = "listed in " . '$' .
+                "Not_Code_Filename{$basename}";
+            next;
+        } elsif ($basename =~ m{~$}) {
+            $rh_ignored->{$file} = "temporary editor file";
+            next;
+        }
+
+        my $size_in_bytes = (stat $file)[7];
         my $language      = classify_file($file      ,
                                           $rh_Err    ,
                                           $raa_errors,
@@ -603,6 +615,8 @@ sub classify_file {                          # {{{1
         } else { # has an unmapped file extension
             $look_at_first_line = 1;
         }
+    } elsif (defined $Language_by_File{lc $file}) {
+        return $Language_by_File{lc $file};
     } else {  # no file extension
         $look_at_first_line = 1;
     }
@@ -616,20 +630,22 @@ sub classify_file {                          # {{{1
                                                  $rh_Err    , 
                                                  $raa_errors);
         if (!$script_language) {
-            $rh_ignored->{$full_file} = "failed to identify language";
+            $rh_ignored->{$full_file} = "language unknown (loc. a)";
             # returns (unknown)
         }
         if (defined $Language_by_Script{$script_language}) {
-            if (defined $Filters_by_Language{$script_language}) {
+            if (defined $Filters_by_Language{
+                            $Language_by_Script{$script_language}}) {
                 $language = $Language_by_Script{$script_language};
             } else {
                 $rh_ignored->{$full_file} = 
-                    "undefined:  Filters_by_Language{$script_language}";
+                    "undefined:  Filters_by_Language{" . 
+                    $Language_by_Script{$script_language} .
+                    "} for scripting language $script_language";
                 # returns (unknown)
             }
         } else {
-            $rh_ignored->{$full_file} = 
-                "undefined:  Language_by_Script{$script_language}";
+            $rh_ignored->{$full_file} = "language unknown (loc. b)";
             # returns (unknown)
         }
     }
@@ -717,7 +733,7 @@ sub call_counter {                           # {{{1
     #               total lines - blank lines - lines left over after all
     #                   comment filters have been applied
 
-    print "-> call_counter($file)\n" if $opt_v > 2;
+    print "-> call_counter($file, $language)\n" if $opt_v > 2;
     my @routines = @{$Filters_by_Language{$language}};
 #print "call_counter:  ", Dumper(@routines), "\n";
 
@@ -836,12 +852,14 @@ sub remove_f90_comments {                    # {{{1
     return @save_lines;
 } # 1}}}
 sub remove_matches {                         # {{{1
-    my ($ra_lines, $pattern, ) = @_;
+    my ($ra_lines, # in
+        $pattern , # in   Perl regular expression (case insensitive)
+       ) = @_;
     print "-> remove_matches(pattern=$pattern)\n" if $opt_v > 2;
 
     my @save_lines = ();
     foreach (@{$ra_lines}) {
-        next if m{$pattern};
+        next if m{$pattern}i;
         push @save_lines, $_;
     }
 
@@ -929,6 +947,7 @@ sub set_constants {                          # {{{1
     my ($rh_Error_Codes           , # out
         $rh_Language_by_Extension , # out
         $rh_Language_by_Script    , # out
+        $rh_Language_by_File      , # out
         $rhaa_Filters_by_Language , # out
         $rh_Not_Code_Extensions   , # out
         $rh_Not_Code_Filename     , # out
@@ -944,6 +963,8 @@ sub set_constants {                          # {{{1
             'adb'         => 'Ada'                   ,
             'ads'         => 'Ada'                   ,
             'pad'         => 'Ada'                   , # Oracle Ada preprocessor
+            'bat'         => 'DOS Batch'             ,
+            'BAT'         => 'DOS Batch'             ,
             'c'           => 'C'                     ,
             'ec'          => 'C'                     ,
             'pgc'         => 'C'                     , # Postgres embedded C/C++
@@ -1076,6 +1097,11 @@ sub set_constants {                          # {{{1
             'make'     => 'Make'                  ,
             );
 # 1}}}
+%{$rh_Language_by_File}      = (                 # {{{1
+            'makefile'    => 'Make'                  ,
+            'gnumakefile' => 'Make'                  ,
+            );
+# 1}}}
 %{$rhaa_Filters_by_Language} = (                 # {{{1
     'ABAP'               => [   [ 'remove_matches'      , '^\*'    ], ],
     'Ada'                => [   [ 'remove_matches'      , '^\s*--' ], ],
@@ -1091,6 +1117,7 @@ sub set_constants {                          # {{{1
     'COBOL'              => [   [ 'remove_cobol_comments',         ], ],
     'ColdFusion'         => [   [ 'call_regexp_common'  , 'HTML'   ], ],
     'Crystal Report'     => [   [ 'remove_matches'      , '^\s*//' ], ],
+    'DOS Batch'          => [   [ 'remove_matches'      , '^\s*rem', ], ],
     'DTD'                => [   [ 'call_regexp_common'  , 'HTML'   ], ],
     'Expect'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'Focus'              => [   [ 'remove_matches'      , '^\s*\-\*'  ], ],
@@ -1200,6 +1227,7 @@ sub set_constants {                          # {{{1
    "zip"     => 1,  # zip archive
 ); # 1}}}
 %{$rh_Not_Code_Filename}     = (                 # {{{1
+   "AUTHORS"     => 1,
    "README"      => 1,
    "Readme"      => 1,
    "readme"      => 1,
@@ -1372,7 +1400,7 @@ sub set_constants {                          # {{{1
     'delphi'                       =>   2.76,
     'dl/1'                         =>   2.00,
     'dna4'                         =>   4.21,
-    'dos batch files'              =>   0.63,
+    'DOS Batch'                    =>   0.63,
     'dsp assembly'                 =>   0.50,
     'dtabl'                        =>   1.74,
     'dtipt'                        =>   1.74,
@@ -1519,6 +1547,7 @@ sub set_constants {                          # {{{1
     'magec'                        =>   5.00,
     'magik'                        =>   3.81,
     'Lake'                         =>   3.81,
+'Make'                       =>   2.50,
     'mantis'                       =>   2.96,
     'mapper'                       =>   0.99,
     'mark iv'                      =>   2.00,
