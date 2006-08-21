@@ -116,7 +116,7 @@ die $usage unless defined $opt_show_lang or
 my $nFiles_Found               = 0;  # updated in make_file_list
 my $Regexp_Common_Is_Installed = 0;  # installed only if needed
 my (%Error_Codes, %Language_by_Extension, %Language_by_Script,
-    %Filters_by_Language, %Not_Code_Extensions, %Not_Code_Filename,
+    %Filters_by_Language, %Not_Code_Extension, %Not_Code_Filename,
     %Language_by_File, %Scale_Factor,
    );
 set_constants(               #        Sample values:
@@ -126,7 +126,7 @@ set_constants(               #        Sample values:
     \%Language_by_File     , # Language_by_File{makefile}  = 'Make'
     \%Filters_by_Language  , # Filters_by_Language{Bourne Shell}[0] = 
                              #      [ 'remove_matches' , '^\s*#'  ]
-    \%Not_Code_Extensions  , # Not_Code_Extensions{jpg}    = 1
+    \%Not_Code_Extension   , # Not_Code_Extension{jpg}     = 1
     \%Not_Code_Filename    , # Not_Code_Filename{README}   = 1
     \%Scale_Factor         , # Scale_Factor{Perl}          = 4.0
     );
@@ -593,7 +593,11 @@ sub classify_file {                          # {{{1
     if ($file =~ /\.(\w+)$/) { # has an extension
         print "$full_file extension=[$1]\n" if $opt_v > 2;
         my $extension = $1;
-        return $language if $Not_Code_Extensions{$extension}; # (unknown)
+        if ($Not_Code_Extension{$extension}) {
+            $rh_ignored->{$full_file} = 
+                'listed in $Not_Code_Extension{' . $extension . '}';
+            return $language;
+        }
         if (defined $Language_by_Extension{$extension}) {
             if ($Language_by_Extension{$extension} eq
                 'MATLAB or Objective C') {
@@ -949,7 +953,7 @@ sub set_constants {                          # {{{1
         $rh_Language_by_Script    , # out
         $rh_Language_by_File      , # out
         $rhaa_Filters_by_Language , # out
-        $rh_Not_Code_Extensions   , # out
+        $rh_Not_Code_Extension   , # out
         $rh_Not_Code_Filename     , # out
         $rh_Scale_Factor          , # out
        ) = @_;
@@ -1159,9 +1163,10 @@ sub set_constants {                          # {{{1
     'Visual Basic'       => [   [ 'remove_matches'      , '^\s*\47'], ],  # \47 = octal for '
     'yacc'               => [   [ 'remove_c_comments'   ,          ], ], 
     'lex'                => [   [ 'remove_c_comments'   ,          ], ], 
+    'XML'                => [   [ 'call_regexp_common'  , 'HTML'   ], ],
     );
 # 1}}}
-%{$rh_Not_Code_Extensions}   = (                 # {{{1
+%{$rh_Not_Code_Extension}    = (                 # {{{1
    "1"       => 1,  # Man pages (documentation):
    "2"       => 1,
    "3"       => 1,
