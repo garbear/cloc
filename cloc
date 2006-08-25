@@ -27,7 +27,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 # 1}}}
-my $VERSION = 0.64;
+my $VERSION = 0.65;
 require 5.006;
 use warnings;
 use strict;
@@ -39,7 +39,8 @@ use IO::File;
 use Digest::MD5;                    # not in standard distribution
 use Text::Tabs qw { expand };
 #use Data::Dumper::Simple;
-use Data::Dumper;
+#use Data::Dumper;
+use Cwd qw { cwd };
 
 # Usage information, options processing.       {{{1
 my $script = basename $0;
@@ -59,6 +60,17 @@ Usage: $script [options] <file(s)/dir(s)> | <report files>
                              their path.
    --exclude_lang=<L1>[,L2,] Exclude the given comma separated languages
                              L1, L2, L3, et cetera, from being counted.
+   --extract_with=<cmd>      Use <cmd> to extract binary archive files (e.g.:
+                             .tar.gz, .zip, .Z).  Use the literal '>FILE<' as 
+                             a stand-in for the actual file(s) to be
+                             extracted.  For example, to count lines of code
+                             in the input files 
+                                gcc-4.2.tar.gz  perl-5.8.8.tar.gz  
+                             on Unix use  
+                               --extract_with='gzip -dc >FILE< | tar xfv -'
+                             and on Windows use: 
+                               --extract_with=\"\\\"c:\\Program Files\\WinZip\\WinZip32.exe\\\" -e -o >FILE< .\"
+                             (if you have WinZip installed there).
    --found=<file>            Save names of every file found to <file>.
    --ignored=<file>          Save names of ignored files and the reason they
                              were ignored to <file>.
@@ -66,6 +78,8 @@ Usage: $script [options] <file(s)/dir(s)> | <report files>
                              after each filter is applied.
    --progress_rate=<n>       Show progress update after every <n> files are
                              processed (default <n>=100).
+   --quiet                   Suppress all information messages except for
+                             the final report.
    --report_file=<file>      Write the results to <file> instead of STDOUT.
    --read_lang_def=<file>    Load from <file> the language processing filters.
                              (see also --write_lang_def) then use these filters
@@ -79,15 +93,13 @@ Usage: $script [options] <file(s)/dir(s)> | <report files>
                              lines and comments removed.  The name of each
                              stripped file is the original file name with 
                              .<ext> appended to it.
-   --write_lang_def=<file>   Writes to <file. the language processing filters
-                             then exits.  Useful as a first step to creating
-                             custom language definitions (see --read_lang_def).
    --sum_reports             Input arguments are report files previously
                              created with the --report_file option.  Makes
                              a cummulative set of results containing the
                              sum of data from the individual report files.
-   --quiet                   Suppress all information messages except for
-                             the final report.
+   --write_lang_def=<file>   Writes to <file. the language processing filters
+                             then exits.  Useful as a first step to creating
+                             custom language definitions (see --read_lang_def).
    -v[=<n>]                  Verbose switch (optional numeric value).
    --version                 Print the version of this program and exit.
 
@@ -99,12 +111,14 @@ my ($opt_found, $opt_categorized, $opt_ignored,
     $opt_print_filter_stages, $opt_v, $opt_version,
     $opt_exclude_lang, $opt_exclude_dir, $opt_read_lang_def, $opt_write_lang_def,
     $opt_strip_comments, $opt_quiet, $opt_report_file, $opt_sum_reports,
+    $opt_extract_with,
    );
 GetOptions(
            "categorized=s"       => \$opt_categorized         ,
            "counted=s"           => \$opt_counted             ,
            "exclude_lang=s"      => \$opt_exclude_lang        ,
            "exclude_dir=s"       => \$opt_exclude_dir         ,
+           "extract_with=s"      => \$opt_extract_with        , 
            "found=s"             => \$opt_found               ,
            "ignored=s"           => \$opt_ignored             ,
            "quiet"               => \$opt_quiet               ,
@@ -207,11 +221,40 @@ if ($opt_write_lang_def) {
 }
 # 1}}}
 # Step 2:  Create a list of files to consider. {{{1
-#  a) Create a list of every file that might contain source
+#  a) If inputs are binary archives, first cd to a temp
+#     directory, expand the archive with the user-given
+#     extraction tool, then add the temp directory to
+#     the list of dirs to process.
+#  b) Create a list of every file that might contain source
 #     code.  Ignore binary files, zero-sized files, and
 #     any file in a directory the user says to exclude.
-#  b) Determine the language for each file in the list.
+#  c) Determine the language for each file in the list.
 #
+if ($opt_extract_with) {
+    my $cwd = cwd();
+#print "cwd main = [$cwd]\n";
+    my @extract_location = ();
+    foreach my $bin_file (@ARGV) {
+        my $extract_dir = tempdir( CLEANUP => 0 );  # 1 = delete on exit
+        chdir $extract_dir;
+        print "Using temp dir [$extract_dir] to extract $bin_file\n" 
+            unless $opt_quiet;
+        my $bin_file_full_path = "";
+        if (File::Spec->file_name_is_absolute( $bin_file )) {
+            $bin_file_full_path = $bin_file;
+#print "bin_file_full_path (was ful) = [$bin_file_full_path]\n";
+        } else {
+            $bin_file_full_path = File::Spec->catfile( $cwd, $bin_file );
+#print "bin_file_full_path (was rel) = [$bin_file_full_path]\n";
+        }
+        (my $extract_cmd = $opt_extract_with ) =~ s/>FILE</$bin_file_full_path/g;
+        print  $extract_cmd, "\n";
+        system $extract_cmd;
+        push @extract_location, $extract_dir;
+        chdir $cwd;
+    }
+    @ARGV = @extract_location;
+}
 my @Errors    = ();
 my @file_list = ();  # global variable updated in files()
 my %Ignored   = ();  # files that are not counted (language not recognized or
