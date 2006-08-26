@@ -973,7 +973,6 @@ sub call_counter {                           # {{{1
     } else {
         @lines = remove_matches(\@lines, '^\s*$'); # removes blank lines
     }
-    chomp(@lines);
     my $blank_lines = $total_lines - scalar @lines;
     print_lines($file, "Blank lines removed:", \@lines) 
         if $opt_print_filter_stages;
@@ -1021,6 +1020,7 @@ sub write_file {                             # {{{1
 
     my $OUT = new IO::File $file, "w";
     if (defined $OUT) {
+        chomp(@lines);
         print $OUT join("\n", @lines), "\n";
         $OUT->close;
     } else {
@@ -1383,6 +1383,7 @@ sub set_constants {                          # {{{1
             "ig"          => "Modula3"               ,
             "ml"          => "ML"                    , 
             "mli"         => "ML"                    ,
+            "mps"         => "MUMPS"                 ,
             "rb"          => "Ruby"                  ,
             "hs"          => "Haskell"               , 
             "lhs"         => "Haskell"               ,
@@ -1420,16 +1421,22 @@ sub set_constants {                          # {{{1
     'ASP.Net'            => [   [ 'remove_c_comments'   ,          ], ],
     'Ada'                => [   [ 'remove_matches'      , '^\s*--' ], ],
     'ADSO/IDSM'          => [   [ 'remove_matches'      , '^\s*\*[\+\!]' ], ],
-    'Assembler'          => [   [ 'remove_c_comments'   ,          ], 
+    'Assembler'          => [  
                                 [ 'remove_matches'      , '^\s*//' ],
-                                [ 'remove_matches'      , '^\s*;'  ], ],
+                                [ 'remove_matches'      , '^\s*;'  ],
+                                [ 'remove_c_comments'   ,          ], 
+                            ],
     'awk'                => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'C'                  => [   [ 'remove_c_comments'   ,          ], ], 
-    'C++'                => [   [ 'remove_c_comments'   ,          ],
-                                [ 'remove_matches'      , '^\s*//' ], ],
+    'C++'                => [   
+                                [ 'remove_matches'      , '^\s*//' ], 
+                                [ 'remove_c_comments'   ,          ],
+                            ],
     'C/C++ Header'       => [   [ 'remove_c_comments'   ,          ], ],
-    'C#'                 => [   [ 'remove_c_comments'   ,          ],
-                                [ 'remove_matches'      , '^\s*//' ], ],
+    'C#'                 => [   
+                                [ 'remove_matches'      , '^\s*//' ], 
+                                [ 'remove_c_comments'   ,          ],
+                            ],
     'CCS'                => [   [ 'remove_c_comments'   ,          ], ],
     'COBOL'              => [   [ 'remove_cobol_comments',         ], ],
     'ColdFusion'         => [   [ 'call_regexp_common'  , 'HTML'   ], ],
@@ -1447,10 +1454,14 @@ sub set_constants {                          # {{{1
     'Haskell'            => [   [ 'remove_haskell_comments', '>filename<' ], ],
     'JSP'                => [   [ 'call_regexp_common'  , 'HTML'   ],
                                 [ 'remove_jsp_comments',           ], ],
-    'Java'               => [   [ 'remove_c_comments'   ,          ],
-                                [ 'remove_matches'      , '^\s*//' ], ],
-    'Javascript'         => [   [ 'remove_c_comments'   ,          ],
-                                [ 'remove_matches'      , '^\s*//' ], ],
+    'Java'               => [   
+                                [ 'remove_matches'      , '^\s*//' ], 
+                                [ 'remove_c_comments'   ,          ],
+                            ],
+    'Javascript'         => [   
+                                [ 'remove_c_comments'   ,          ],
+                                [ 'remove_matches'      , '^\s*//' ], 
+                            ],
     'JCL'                => [   [ 'remove_jcl_comments' ,          ], ],
     'Lisp'               => [   [ 'remove_matches'      , '^\s*;'  ], ],
     'Make'               => [   [ 'remove_matches'      , '^\s*#'  ], ], 
@@ -1460,6 +1471,7 @@ sub set_constants {                          # {{{1
         # which also treats { ... } as a comment is not really correct.
     'Objective C'        => [   [ 'remove_c_comments'   ,          ], ], 
     'MATLAB or Objective C' => [ [ 'die' ,          ], ], # never called
+    'MUMPS'              => [   [ 'remove_matches'      , '^\s*;'  ], ], 
     'Octave'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'Oracle Forms'       => [   [ 'remove_c_comments'   ,          ], ],
     'Oracle Reports'     => [   [ 'remove_c_comments'   ,          ], ],
@@ -1467,13 +1479,17 @@ sub set_constants {                          # {{{1
     'Perl'               => [   [ 'remove_below'        , '^__(END|DATA)__'],
                                 [ 'remove_matches'      , '^\s*#'  ], ], 
     'Python'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
-    'PHP'                => [   [ 'remove_matches'      , '^\s*#'  ],
+    'PHP'                => [   
+                                [ 'remove_matches'      , '^\s*#'  ],
                                 [ 'remove_matches'      , '^\s*//' ], 
-                                [ 'remove_c_comments'   ,          ], ],
+                                [ 'remove_c_comments'   ,          ], 
+                            ],
     'Rexx'               => [   [ 'remove_c_comments'   ,          ], ],
     'Ruby'               => [   [ 'remove_matches'      , '^\s*#'  ], ], 
-    'SQL'                => [   [ 'remove_matches'      , '^\s*--' ],
-                                [ 'remove_c_comments'   ,          ], ],
+    'SQL'                => [   
+                                [ 'remove_matches'      , '^\s*--' ],
+                                [ 'remove_c_comments'   ,          ], 
+                            ],
     'sed'                => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'Bourne Shell'       => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'C Shell'            => [   [ 'remove_matches'      , '^\s*#'  ], ], 
@@ -1897,7 +1913,7 @@ sub set_constants {                          # {{{1
     'ms compiled basic'            =>   0.88,
     'msl'                          =>   1.25,
     'mulisp'                       =>   1.25,
-    'mumps'                        =>   4.21,
+    'MUMPS'                        =>   4.21,
     'Nastran'                      =>   1.13,
     'natural'                      =>   1.54,
     'natural 1'                    =>   1.51,
