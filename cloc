@@ -1,3 +1,4 @@
+#!/opt/perl-5.8.8/bin/perl
 #!/usr/bin/env perl
 # cloc -- Count Lines of Code {{{1
 # Copyright (C) 2006 Northrop Grumman Corporation
@@ -457,6 +458,8 @@ sub generate_report {                        # {{{1
             $scaled                           ;
         $sum_scaled  += $scaled;
     }
+    my $avg_scale = 1;  # weighted average of scale factors
+       $avg_scale = $sum_scaled / $sum_code if $sum_code;
     push @results, $hypen_line;
     push @results,
     sprintf "%-13s %9d %9d %9d %9d x %6.2f = %14.2f",
@@ -465,7 +468,7 @@ sub generate_report {                        # {{{1
         $sum_blank   ,
         $sum_comment ,
         $sum_code    ,
-        $sum_scaled / $sum_code,  # weighted average of scale factors
+        $avg_scale   ,
         $sum_scaled  ;
     push @results, $hypen_line;
 
@@ -964,12 +967,13 @@ sub call_counter {                           # {{{1
 
     my $total_lines = scalar @lines;
 
-    print_lines($file, "Original file:",       \@lines) if $opt_print_filter_stages;
+    print_lines($file, "Original file:", \@lines) if $opt_print_filter_stages;
     if ($language eq "COBOL") {
         @lines = remove_cobol_blanks(\@lines);
     } else {
         @lines = remove_matches(\@lines, '^\s*$'); # removes blank lines
     }
+    chomp(@lines);
     my $blank_lines = $total_lines - scalar @lines;
     print_lines($file, "Blank lines removed:", \@lines) 
         if $opt_print_filter_stages;
@@ -1112,9 +1116,11 @@ sub remove_cobol_blanks {                    # {{{1
         next if m/^\s*$/;
         my $line = expand($_);  # convert tabs to equivalent spaces
         $free_format = 1 if $line =~ m/^......\$.*SET.*SOURCEFORMAT.*FREE/i;
-        if (!$free_format) {
+        if ($free_format) {
+            push @save_lines, $_;
+        } else {
             push @save_lines, $_ unless m/^\d{6}\s*$/ or
-                                        ($line =~ m/^\d{6}\s{66}/);
+                              ($line =~ m/^\d{6}\s{66}/);
         }
     }
     return @save_lines;
@@ -1129,10 +1135,9 @@ sub remove_cobol_comments {                  # {{{1
     foreach (@{$ra_lines}) {
         if (m/^......\$.*SET.*SOURCEFORMAT.*FREE/i) {$free_format = 1;}
         if ($free_format) {
-            push @save_lines, $_ unless m{^\s*[\*\/]};
+            push @save_lines, $_ unless m{^\s*\*};
         } else {
-            push @save_lines, $_ unless m{^......[\*\/]} or
-                                        m{^[\*\/]};
+            push @save_lines, $_ unless m{^......\*} or m{^\*};
         }
     }
     return @save_lines;
