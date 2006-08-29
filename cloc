@@ -1,4 +1,3 @@
-#!/opt/perl-5.8.8/bin/perl
 #!/usr/bin/env perl
 # cloc -- Count Lines of Code {{{1
 # Copyright (C) 2006 Northrop Grumman Corporation
@@ -28,8 +27,9 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 # 1}}}
-my $VERSION = 0.65;
+my $VERSION = 0.67;
 require 5.006;
+# use modules                                  {{{1
 use warnings;
 use strict;
 use Getopt::Long;
@@ -37,12 +37,31 @@ use File::Basename;
 use File::Temp qw { tempfile tempdir };
 use File::Find;
 use IO::File;
-use Digest::MD5;                    # not in standard distribution
+# Digest::MD5 isn't in the standard distribution. Use it only if installed.
+my $HAVE_Digest_MD5;
+BEGIN {
+    if (eval "use Digest::MD5;") {
+        $HAVE_Digest_MD5 = 1;
+    } else {
+        $HAVE_Digest_MD5 = 0;
+    }
+}
+# Regexp::Common also isn't in the standard distribution.  It will
+# be installed in a temp directory if necessary.
+my $HAVE_Rexexp_Common;
+BEGIN {
+    if (eval "use Regexp::Common;") {
+        $HAVE_Rexexp_Common = 1;
+    } else {
+        $HAVE_Rexexp_Common = 0;
+    }
+}
+
 use Text::Tabs qw { expand };
 #use Data::Dumper::Simple;
 #use Data::Dumper;
 use Cwd qw { cwd };
-
+# 1}}}
 # Usage information, options processing.       {{{1
 my $script = basename $0;
 my $usage  = "
@@ -52,6 +71,8 @@ Usage: $script [options] <file(s)/dir(s)> | <report files>
  recursively below the given directories.
 
  Options:
+   --by_file                 Report results for every source file encountered
+                             in addition to reporting by language.
    --categorized=<file>      Save names of categorized files to <file>.
    --counted=<file>          Save names of processed source files to <file>.
    --exclude_dir=<D1>[,D2,]  Exclude the given comma separated directories
@@ -110,11 +131,13 @@ my $start_time = time();
 my ($opt_found, $opt_categorized, $opt_ignored, 
     $opt_counted, $opt_show_ext, $opt_show_lang, $opt_progress_rate, 
     $opt_print_filter_stages, $opt_v, $opt_version,
-    $opt_exclude_lang, $opt_exclude_dir, $opt_read_lang_def, $opt_write_lang_def,
+    $opt_exclude_lang, $opt_exclude_dir, 
+    $opt_read_lang_def, $opt_write_lang_def,
     $opt_strip_comments, $opt_quiet, $opt_report_file, $opt_sum_reports,
-    $opt_extract_with,
+    $opt_extract_with, $opt_by_file,
    );
 GetOptions(
+           "by_file"             => \$opt_by_file             ,
            "categorized=s"       => \$opt_categorized         ,
            "counted=s"           => \$opt_counted             ,
            "exclude_lang=s"      => \$opt_exclude_lang        ,
@@ -151,8 +174,7 @@ die $usage unless defined $opt_show_lang       or
 # 1}}}
 # Step 1:  Initialize global constants.        {{{1
 #
-my $nFiles_Found               = 0;  # updated in make_file_list
-my $Regexp_Common_Is_Installed = 0;  # installed only if needed
+my $nFiles_Found = 0;  # updated in make_file_list
 my (%Language_by_Extension, %Language_by_Script,
     %Filters_by_Language, %Not_Code_Extension, %Not_Code_Filename,
     %Language_by_File, %Scale_Factor,
@@ -275,6 +297,7 @@ printf "%8d unique file%s.            \n",
 # Step 4:  Count code, comments, blank lines.  {{{1
 #
 my %Results_by_Language = ();
+my %Results_by_File     = ();
 my $nCounted = 0;
 foreach my $file (sort keys %unique_source_file) {
     ++$nCounted;
@@ -292,17 +315,23 @@ foreach my $file (sort keys %unique_source_file) {
         }
         next;
     }
-    my $basename = basename $file;
 
     my ($all_line_count,
         $blank_count   ,
         $comment_count ,
        ) = call_counter($file, $Language{$file});
+    my $code_count = $all_line_count - $blank_count - $comment_count;
+    if ($opt_by_file) {
+        $Results_by_File{$file}{'code'   } = $code_count     ;
+        $Results_by_File{$file}{'blank'  } = $blank_count    ;
+        $Results_by_File{$file}{'comment'} = $comment_count  ;
+        $Results_by_File{$file}{'lang'   } = $Language{$file};
+        $Results_by_File{$file}{'nFiles' } = 1;
+    }
+
     ++$Results_by_Language{$Language{$file}}{'nFiles'};
-    $Results_by_Language{$Language{$file}}{'code'}    += $all_line_count -
-                                                         $blank_count    -
-                                                         $comment_count ;
-    $Results_by_Language{$Language{$file}}{'blank'}   += $blank_count;
+    $Results_by_Language{$Language{$file}}{'code'}    += $code_count   ;
+    $Results_by_Language{$Language{$file}}{'blank'}   += $blank_count  ;
     $Results_by_Language{$Language{$file}}{'comment'} += $comment_count;
 }
 my @ignored_reasons = map { "$_: $Ignored{$_}" } sort keys %Ignored;
@@ -316,13 +345,19 @@ printf "%8d file%s ignored.\n", plural_form(scalar keys %Ignored)
     unless $opt_quiet;
 print_errors(\%Error_Codes, \@Errors) if @Errors;
 exit unless %Results_by_Language;
+
 my @results = generate_report($VERSION, $end_time - $start_time,
                               "by language",
                              \%Results_by_Language, \%Scale_Factor);
-if ($opt_report_file) {
-    write_file($opt_report_file, @results);
-} else {
-    print "\n", join("\n", @results), "\n";
+if ($opt_report_file) { write_file($opt_report_file, @results); } 
+else                  { print "\n", join("\n", @results), "\n"; }
+
+if ($opt_by_file) {
+    my @results = generate_report($VERSION, $end_time - $start_time,
+                                  "by file",
+                                 \%Results_by_File, \%Scale_Factor);
+    if ($opt_report_file) { write_file($opt_report_file, @results); } 
+    else                  { print "\n", join("\n", @results), "\n"; }
 }
 # 1}}}
 
@@ -376,7 +411,7 @@ sub generate_report {                        # {{{1
     # returns an array of lines containing the results
     my ($version    , # in
         $elapsed_sec, # in
-        $report_type, # in  "by language" or "by report file"
+        $report_type, # in  "by language" | "by report file" | "by file"
         $rhh_count  , # in  count{TYPE}{nFiles|code|blank|comment|scaled}
         $rh_scale   , # in
        ) = @_;
@@ -398,11 +433,16 @@ sub generate_report {                        # {{{1
 
     my $URL        = "http://cloc.sourceforge.net";
     my $hypen_line = sprintf "%s", '-' x 79;
+    my $data_line  = "";
     my $first_column;
     my $BY_LANGUAGE = 0;
-    if ($report_type eq "by language") {
+    my $BY_FILE     = 0;
+    if      ($report_type eq "by language") {
         $first_column = "Language";
         $BY_LANGUAGE  = 1;
+    } elsif ($report_type eq "by file")     {
+        $first_column = "File";
+        $BY_FILE      = 1;
     } else {
         $first_column = "Report File";
     }
@@ -417,15 +457,15 @@ sub generate_report {                        # {{{1
 
     push @results, $hypen_line;
 
-    push @results,
-    sprintf "%-13s %9s %9s %9s %9s %8s   %14s",
-        $first_column   ,
-        "files"         ,
+    $data_line  = sprintf "%-13s ", $first_column          ;
+    $data_line .= sprintf "%9s "  , "files" unless $BY_FILE;
+    $data_line .= sprintf "%9s %9s %9s %8s   %14s",
         "blank"         ,
         "comments"      ,
         "code"          ,
         "scale"         ,
         "3rd gen. equiv";
+    push @results, $data_line;
     push @results, $hypen_line;
 
     my $sum_scaled = 0;
@@ -435,41 +475,47 @@ sub generate_report {                        # {{{1
                                }
                           keys %{$rhh_count}) {
         my ($factor, $scaled);
-        if ($BY_LANGUAGE) {
+        if ($BY_LANGUAGE or $BY_FILE) {
             $factor = 1;
-            if (defined $rh_scale->{$lang_or_file}) {
-                $factor = $rh_scale->{$lang_or_file};
-            } else {
-                warn "No scale factor for $lang_or_file; using 1.00";
+            if ($BY_LANGUAGE) {
+                if (defined $rh_scale->{$lang_or_file}) {
+                    $factor = $rh_scale->{$lang_or_file};
+                } else {
+                    warn "No scale factor for $lang_or_file; using 1.00";
+                }
+            } else { # by individual code file
+                $factor = $rh_scale->{$rhh_count->{$lang_or_file}{'lang'}};
             }
             $scaled = $factor*$rhh_count->{$lang_or_file}{'code'};
         } else {
             $scaled =         $rhh_count->{$lang_or_file}{'scaled'};
             $factor = $scaled/$rhh_count->{$lang_or_file}{'code'};
         }
-        push @results,
-        sprintf "%-13s %9d %9d %9d %9d x %6.2f = %14.2f",
-            $lang_or_file                         ,
-            $rhh_count->{$lang_or_file}{'nFiles'} ,
+        $data_line  = sprintf "%-13s ", $lang_or_file;
+        $data_line .= sprintf "%9d ", $rhh_count->{$lang_or_file}{'nFiles'} 
+            unless $BY_FILE;
+        $data_line .= sprintf "%9d %9d %9d x %6.2f = %14.2f",
             $rhh_count->{$lang_or_file}{'blank'}  ,
             $rhh_count->{$lang_or_file}{'comment'},
             $rhh_count->{$lang_or_file}{'code'}   ,
             $factor                           ,
             $scaled                           ;
         $sum_scaled  += $scaled;
+        push @results, $data_line;
     }
     my $avg_scale = 1;  # weighted average of scale factors
        $avg_scale = $sum_scaled / $sum_code if $sum_code;
     push @results, $hypen_line;
-    push @results,
-    sprintf "%-13s %9d %9d %9d %9d x %6.2f = %14.2f",
-        "SUM:"       ,
-        $sum_files   ,
+    $data_line  = sprintf "%-13s ", "SUM:"  ;
+    $data_line .= sprintf "%9d ", $sum_files
+        unless $BY_FILE                     ;
+    $data_line .= sprintf "%9d %9d %9d x %6.2f = %14.2f",
         $sum_blank   ,
         $sum_comment ,
         $sum_code    ,
         $avg_scale   ,
         $sum_scaled  ;
+    push @results, $data_line;
     push @results, $hypen_line;
 
     return @results;
@@ -931,9 +977,13 @@ sub different_files {                        # {{{1
             push @{$raa_errors}, [$rh_Err->{'Unable to read'} , $F];
             $rh_ignored->{$F} = 'cannot read';
         } else {
-            binmode $IN;
-#           $file_hash{ $F } = $F;
-            $file_hash{ Digest::MD5->new->addfile($IN)->hexdigest } = $F;
+            if ($HAVE_Digest_MD5) {
+                binmode $IN;
+                $file_hash{ Digest::MD5->new->addfile($IN)->hexdigest } = $F;
+            } else {
+                # all files treated unique
+                $file_hash{ $F } = $F;
+            }
             $IN->close;
         }
     }
@@ -1032,6 +1082,9 @@ sub write_file {                             # {{{1
 } # 1}}}
 sub remove_c_comments {                      # {{{1
     my ($ra_lines, ) = @_;
+
+    # DON'T USE THIS!  Can causes Perl < v5.8.8 to seg fault.
+    #                  Use the Regexp::Common::Common C filter instead.
 
     # http://search.cpan.org/~jhi/perl-5.8.0/pod/perlfaq6.pod#How_do_I_use_a_regular_expression_to_strip_C_style_comments_from_a_file%3F
 
@@ -1269,143 +1322,148 @@ sub set_constants {                          # {{{1
        ) = @_;
 # 1}}}
 %{$rh_Language_by_Extension} = (                 # {{{1
+            'abap'        => "ABAP"                  ,
             'ada'         => 'Ada'                   ,
             'adb'         => 'Ada'                   ,
             'ads'         => 'Ada'                   ,
             'adso'        => "ADSO/IDSM"             ,
-            'asm'         => 'Assembler'             ,
-            'S'           => 'Assembler'             ,
-            's'           => 'Assembler'             ,
             'asa'         => 'ASP'                   ,
-            'asp'         => 'ASP'                   ,
             'asax'        => 'ASP.Net'               ,
             'ascx'        => 'ASP.Net'               ,
+            'asm'         => 'Assembler'             ,
             'asmx'        => 'ASP.Net'               ,
+            'asp'         => 'ASP'                   ,
             'aspx'        => 'ASP.Net'               ,
-            'config'      => 'ASP.Net'               ,
-            'resx'        => 'ASP.Net'               ,
-            'webinfo'     => 'ASP.Net'               ,
-            'pad'         => 'Ada'                   , # Oracle Ada preprocessor
+            'awk'         => 'awk'                   ,
+            'bash'        => "Bourne Shell"          ,
+            'bas'         => "Visual Basic"          ,
             'bat'         => 'DOS Batch'             ,
             'BAT'         => 'DOS Batch'             ,
-            'c'           => 'C'                     ,
-            'ec'          => 'C'                     ,
-            'pgc'         => 'C'                     , # Postgres embedded C/C++
-            'ccs'         => 'CCS'                   ,
-            'C'           => 'C++'                   ,
-            'cpp'         => 'C++'                   ,
-            'cxx'         => 'C++'                   ,
-            'cc'          => 'C++'                   ,
-            'pcc'         => 'C++'                   , # Oracle C++ preprocessor
-            'cs'          => 'C#'                    ,
-            'cob'         => 'COBOL'                 ,
             'cbl'         => 'COBOL'                 ,
-            'COB'         => 'COBOL'                 ,
             'CBL'         => 'COBOL'                 ,
-            'h'           => 'C/C++ Header'          ,
-            'H'           => 'C/C++ Header'          ,
-            'hpp'         => 'C/C++ Header'          ,
-            'hh'          => 'C/C++ Header'          ,
-            'html'        => "HTML"                  ,
-            'htm'         => "HTML"                  ,
-            'f'           => 'Fortran 77'            ,
-            'F'           => 'Fortran 77'            ,
+            'c'           => 'C'                     ,
+            'C'           => 'C++'                   ,
+            'cc'          => 'C++'                   ,
+            'ccs'         => 'CCS'                   ,
+            'cfm'         => "ColdFusion"            ,
+            'cl'          => 'Lisp'                  ,
+            'cob'         => 'COBOL'                 ,
+            'COB'         => 'COBOL'                 ,
+            'config'      => 'ASP.Net'               ,
+            'cpp'         => 'C++'                   ,
+            'cs'          => 'C#'                    ,
+            'csh'         => 'C Shell'               ,
+            'cxx'         => 'C++'                   ,
+            'dpr'         => 'Pascal'                ,
+            'dtd'         => "DTD"                   ,
+            'ec'          => 'C'                     ,
+            'el'          => 'Lisp'                  ,
+            'exp'         => 'Expect'                ,
             'f77'         => 'Fortran 77'            ,
             'F77'         => 'Fortran 77'            ,
             'f90'         => 'Fortran 90'            ,
-            'f95'         => 'Fortran 95'            ,
             'F90'         => 'Fortran 90'            ,
+            'f95'         => 'Fortran 95'            ,
             'F95'         => 'Fortran 95'            ,
-            'pfo'         => 'Fortran 77'            ,
+            'f'           => 'Fortran 77'            ,
+            'F'           => 'Fortran 77'            ,
+            'fmt'         => "Oracle Forms"          ,
+            'focexec'     => "Focus"                 ,
+            'frm'         => "Visual Basic"          ,
+            'gnumakefile' => 'Make'                  ,
+            'Gnumakefile' => 'Make'                  ,
+            'h'           => 'C/C++ Header'          ,
+            'H'           => 'C/C++ Header'          ,
+            'hh'          => 'C/C++ Header'          ,
+            'hpp'         => 'C/C++ Header'          ,
+            "hs"          => "Haskell"               , 
+            'htm'         => "HTML"                  ,
+            'html'        => "HTML"                  ,
+            'i3'          => "Modula3"               ,
+            'idl'         => "IDL"                   ,
+            'ig'          => "Modula3"               ,
+            'inc'         => 'inc'                   , # might be PHP
+            'itk'         => 'Tcl/Tk'                ,
+            'java'        => 'Java'                  ,
+            'jcl'         => "JCL"                   , # IBM Job Control Lang.
+            'jl'          => 'Lisp'                  ,
+            'js'          => "Javascript"            ,
+            "jsp"         => "JSP"                   , # Java server pages
+            'ksh'         => 'Korn Shell'            ,
+            "lhs"         => "Haskell"               ,
+            'l'           => 'lex'                   ,
+            'lsp'         => 'Lisp'                  ,
+            'lua'         => 'lua'                   ,
+            "m3"          => "Modula3"               , 
+            'makefile'    => 'Make'                  ,
+            'Makefile'    => 'Make'                  ,
+            "mg"          => "Modula3"               , 
+            "mli"         => "ML"                    ,
+            "ml"          => "ML"                    , 
             'm'           => 'MATLAB or Objective C' ,
-            'p'           => 'Pascal'                ,
+            "mps"         => "MUMPS"                 ,
+            'pad'         => 'Ada'                   , # Oracle Ada preprocessor
             'pas'         => 'Pascal'                ,
-            'pp'          => 'Pascal'                ,
-            'dpr'         => 'Pascal'                ,
-            'pl'          => 'Perl'                  ,
-            'PL'          => 'Perl'                  ,
-            'pm'          => 'Perl'                  ,
+            'pcc'         => 'C++'                   , # Oracle C++ preprocessor
             'perl'        => 'Perl'                  ,
-            'plx'         => 'Perl'                  ,
-            'plh'         => 'Perl'                  ,
-            'php'         => 'PHP'                   ,
+            'pfo'         => 'Fortran 77'            ,
+            'pgc'         => 'C'                     , # Postgres embedded C/C++
             'php3'        => 'PHP'                   ,
             'php4'        => 'PHP'                   ,
             'php5'        => 'PHP'                   ,
             'php6'        => 'PHP'                   ,
-            'inc'         => 'inc'                   , # might be PHP
-            'py'          => 'Python'                ,
-            'sed'         => 'sed'                   ,
-            'sql'         => 'SQL'                   ,
+            'php'         => 'PHP'                   ,
+            'plh'         => 'Perl'                  ,
+            'pl'          => 'Perl'                  ,
+            'PL'          => 'Perl'                  ,
+            'plx'         => 'Perl'                  ,
+            'pm'          => 'Perl'                  ,
+            'p'           => 'Pascal'                ,
+            'pp'          => 'Pascal'                ,
             'psql'        => 'SQL'                   ,
-            'dtd'         => "DTD"                   ,
-            'xsd'         => "XSD"                   ,
-            'cfm'         => "ColdFusion"            ,
-            'focexec'     => "Focus"                 ,
-            'rexx'        => "Rexx"                  ,
-            'vba'         => "Visual Basic"          ,
-            'vb'          => "Visual Basic"          ,
-            'vbp'         => "Visual Basic"          ,
-            'bas'         => "Visual Basic"          ,
-            'vbw'         => "Visual Basic"          ,
-            'frm'         => "Visual Basic"          ,
-            'abap'        => "ABAP"                  ,
-            'fmt'         => "Oracle Forms"          ,
-            'rex'         => "Oracle Reports"        ,
-            'js'          => "Javascript"            ,
-            'jcl'         => "JCL"                   , # IBM Job Control Lang.
-            'sh'          => "Bourne Shell"          ,
-            'bash'        => "Bourne Shell"          ,
-            'awk'         => 'awk'                   ,
-            'tcl'         => 'Tcl/Tk'                ,
-            'tk'          => 'Tcl/Tk'                ,
-            'itk'         => 'Tcl/Tk'                ,
-            'csh'         => 'C Shell'               ,
-            'tcsh'        => 'C Shell'               ,
-            'ksh'         => 'Korn Shell'            ,
-            'java'        => 'Java'                  ,
-            'el'          => 'Lisp'                  ,
-            'scm'         => 'Lisp'                  ,
-            'sc'          => 'Lisp'                  ,
-            'lsp'         => 'Lisp'                  ,
-            'cl'          => 'Lisp'                  ,
-            'jl'          => 'Lisp'                  ,
-            'exp'         => 'Expect'                ,
-            'Makefile'    => 'Make'                  ,
-            'makefile'    => 'Make'                  ,
-            'gnumakefile' => 'Make'                  ,
-            'Gnumakefile' => 'Make'                  ,
-            'y'           => 'yacc'                  ,
-            'l'           => 'lex'                   ,
-            "m3"          => "Modula3"               , 
-            "i3"          => "Modula3"               ,
-            "mg"          => "Modula3"               , 
-            "ig"          => "Modula3"               ,
-            "ml"          => "ML"                    , 
-            "mli"         => "ML"                    ,
-            "mps"         => "MUMPS"                 ,
+            'py'          => 'Python'                ,
             "rb"          => "Ruby"                  ,
-            "hs"          => "Haskell"               , 
-            "lhs"         => "Haskell"               ,
-            "jsp"         => "JSP"                   , # Java server pages
+            'resx'        => 'ASP.Net'               ,
+            'rex'         => "Oracle Reports"        ,
+            'rexx'        => "Rexx"                  ,
+            's'           => 'Assembler'             ,
+            'S'           => 'Assembler'             ,
+            'sc'          => 'Lisp'                  ,
+            'scm'         => 'Lisp'                  ,
+            'sed'         => 'sed'                   ,
+            'sh'          => "Bourne Shell"          ,
+            'sql'         => 'SQL'                   ,
+            'tcl'         => 'Tcl/Tk'                ,
+            'tcsh'        => 'C Shell'               ,
+            'tk'          => 'Tcl/Tk'                ,
+            'vba'         => "Visual Basic"          ,
+            'vbp'         => "Visual Basic"          ,
+            'vb'          => "Visual Basic"          ,
+            'vbw'         => "Visual Basic"          ,
+            'webinfo'     => 'ASP.Net'               ,
             "xml"         => "XML"                   ,
-            "xsl"         => "XLS"                   ,
-            "xslt"        => "XLST"                  ,
+            'xsd'         => "XSD"                   ,
+            "xslt"        => "XSLT"                  ,
+            "xsl"         => "XSL"                   ,
+            'y'           => 'yacc'                  ,
             );
 # 1}}}
 %{$rh_Language_by_Script}    = (                 # {{{1
-            'sh'       => 'Bourne Shell'          ,
             'awk'      => 'awk'                   ,
-            'sed'      => 'sed'                   ,
-            'tcl'      => 'Tcl/Tk'                ,
-            'csh'      => 'C Shell'               ,
-            'tcsh'     => 'C Shell'               ,
-            'ksh'      => 'Korn Shell'            ,
             'bash'     => 'Bourne Shell'          ,# Bourne Again Shell too long
-            'perl'     => 'Perl'                  ,
-            'perl5'    => 'Perl'                  ,
-            'octave'   => 'Octave'                ,
+            'bc'       => 'bc'                    ,# calculator
+            'csh'      => 'C Shell'               ,
+            'idl'      => 'IDL'                   ,
+            'ksh'      => 'Korn Shell'            ,
             'make'     => 'Make'                  ,
+            'octave'   => 'Octave'                ,
+            'perl5'    => 'Perl'                  ,
+            'perl'     => 'Perl'                  ,
+            'sed'      => 'sed'                   ,
+            'sh'       => 'Bourne Shell'          ,
+            'tcl'      => 'Tcl/Tk'                ,
+            'tcsh'     => 'C Shell'               ,
+            'wish'     => 'Tcl/Tk'                ,
             );
 # 1}}}
 %{$rh_Language_by_File}      = (                 # {{{1
@@ -1418,26 +1476,27 @@ sub set_constants {                          # {{{1
 %{$rhaa_Filters_by_Language} = (                 # {{{1
     'ABAP'               => [   [ 'remove_matches'      , '^\*'    ], ],
     'ASP'                => [   [ 'remove_matches'      , '^\s*\47'], ],  # \47 = '
-    'ASP.Net'            => [   [ 'remove_c_comments'   ,          ], ],
+    'ASP.Net'            => [   [ 'call_regexp_common'  , 'C'      ], ],
     'Ada'                => [   [ 'remove_matches'      , '^\s*--' ], ],
     'ADSO/IDSM'          => [   [ 'remove_matches'      , '^\s*\*[\+\!]' ], ],
     'Assembler'          => [  
                                 [ 'remove_matches'      , '^\s*//' ],
                                 [ 'remove_matches'      , '^\s*;'  ],
-                                [ 'remove_c_comments'   ,          ], 
+                                [ 'call_regexp_common'  , 'C'      ], 
                             ],
     'awk'                => [   [ 'remove_matches'      , '^\s*#'  ], ], 
-    'C'                  => [   [ 'remove_c_comments'   ,          ], ], 
+    'bc'                 => [   [ 'remove_matches'      , '^\s*#'  ], ], 
+    'C'                  => [   [ 'call_regexp_common'  , 'C'      ], ], 
     'C++'                => [   
                                 [ 'remove_matches'      , '^\s*//' ], 
-                                [ 'remove_c_comments'   ,          ],
+                                [ 'call_regexp_common'  , 'C'      ],
                             ],
-    'C/C++ Header'       => [   [ 'remove_c_comments'   ,          ], ],
+    'C/C++ Header'       => [   [ 'call_regexp_common'  , 'C'      ], ],
     'C#'                 => [   
                                 [ 'remove_matches'      , '^\s*//' ], 
-                                [ 'remove_c_comments'   ,          ],
+                                [ 'call_regexp_common'  , 'C'      ],
                             ],
-    'CCS'                => [   [ 'remove_c_comments'   ,          ], ],
+    'CCS'                => [   [ 'call_regexp_common'  , 'C'      ], ],
     'COBOL'              => [   [ 'remove_cobol_comments',         ], ],
     'ColdFusion'         => [   [ 'call_regexp_common'  , 'HTML'   ], ],
     'Crystal Reports'    => [   [ 'remove_matches'      , '^\s*//' ], ],
@@ -1452,29 +1511,31 @@ sub set_constants {                          # {{{1
                                 [ 'remove_f90_comments' ,          ], ],
     'HTML'               => [   [ 'call_regexp_common'  , 'HTML'   ], ],
     'Haskell'            => [   [ 'remove_haskell_comments', '>filename<' ], ],
+    'IDL'                => [   [ 'remove_matches'      , '^\s*;'  ], ],
     'JSP'                => [   [ 'call_regexp_common'  , 'HTML'   ],
                                 [ 'remove_jsp_comments',           ], ],
     'Java'               => [   
                                 [ 'remove_matches'      , '^\s*//' ], 
-                                [ 'remove_c_comments'   ,          ],
+                                [ 'call_regexp_common'  , 'C'      ],
                             ],
     'Javascript'         => [   
-                                [ 'remove_c_comments'   ,          ],
                                 [ 'remove_matches'      , '^\s*//' ], 
+                                [ 'call_regexp_common'  , 'C'      ],
                             ],
     'JCL'                => [   [ 'remove_jcl_comments' ,          ], ],
     'Lisp'               => [   [ 'remove_matches'      , '^\s*;'  ], ],
+    'lua'                => [   [ 'call_regexp_common'  , 'lua'    ], ],
     'Make'               => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'MATLAB'             => [   [ 'remove_matches'      , '^\s*%'  ], ], 
     'Modula3'            => [   [ 'call_regexp_common'  , 'Pascal' ], ],
         # Modula 3 comments are (* ... *) so applying the Pascal filter
         # which also treats { ... } as a comment is not really correct.
-    'Objective C'        => [   [ 'remove_c_comments'   ,          ], ], 
+    'Objective C'        => [   [ 'call_regexp_common'  , 'C'      ], ], 
     'MATLAB or Objective C' => [ [ 'die' ,          ], ], # never called
     'MUMPS'              => [   [ 'remove_matches'      , '^\s*;'  ], ], 
     'Octave'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
-    'Oracle Forms'       => [   [ 'remove_c_comments'   ,          ], ],
-    'Oracle Reports'     => [   [ 'remove_c_comments'   ,          ], ],
+    'Oracle Forms'       => [   [ 'call_regexp_common'  , 'C'      ], ],
+    'Oracle Reports'     => [   [ 'call_regexp_common'  , 'C'      ], ],
     'Pascal'             => [   [ 'call_regexp_common'  , 'Pascal' ], ],
     'Perl'               => [   [ 'remove_below'        , '^__(END|DATA)__'],
                                 [ 'remove_matches'      , '^\s*#'  ], ], 
@@ -1482,13 +1543,13 @@ sub set_constants {                          # {{{1
     'PHP'                => [   
                                 [ 'remove_matches'      , '^\s*#'  ],
                                 [ 'remove_matches'      , '^\s*//' ], 
-                                [ 'remove_c_comments'   ,          ], 
+                                [ 'call_regexp_common'  , 'C'      ], 
                             ],
-    'Rexx'               => [   [ 'remove_c_comments'   ,          ], ],
+    'Rexx'               => [   [ 'call_regexp_common'  , 'C'      ], ],
     'Ruby'               => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'SQL'                => [   
                                 [ 'remove_matches'      , '^\s*--' ],
-                                [ 'remove_c_comments'   ,          ], 
+                                [ 'call_regexp_common'  , 'C'      ], 
                             ],
     'sed'                => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'Bourne Shell'       => [   [ 'remove_matches'      , '^\s*#'  ], ], 
@@ -1496,8 +1557,8 @@ sub set_constants {                          # {{{1
     'Korn Shell'         => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'Tcl/Tk'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'Visual Basic'       => [   [ 'remove_matches'      , '^\s*\47'], ],  # \47 = '
-    'yacc'               => [   [ 'remove_c_comments'   ,          ], ], 
-    'lex'                => [   [ 'remove_c_comments'   ,          ], ], 
+    'yacc'               => [   [ 'call_regexp_common'  , 'C'      ], ], 
+    'lex'                => [   [ 'call_regexp_common'  , 'C'      ], ], 
     'XML'                => [   [ 'call_regexp_common'  , 'HTML'   ], ],
     'XSL'                => [   [ 'call_regexp_common'  , 'HTML'   ], ],
     'XSD'                => [   [ 'call_regexp_common'  , 'HTML'   ], ],
@@ -1672,6 +1733,7 @@ sub set_constants {                          # {{{1
     'basic'                        =>   0.75,
     'basic a'                      =>   0.63,
 #   'basic assembly'               =>   0.25,
+    'bc'                           =>   1.50,
     'berkeley pascal'              =>   0.88,
     'better basic'                 =>   0.88,
     'bliss'                        =>   0.75,
@@ -2140,6 +2202,7 @@ sub set_constants {                          # {{{1
 'inc'     => 1.00,
 'lex'     => 1.00,
 'MATLAB'  => 4.00,
+'IDL'     => 3.80,
 'Octave'  => 4.00,
 'ML'      => 3.00,
 'Modula3' => 2.00,
@@ -2147,6 +2210,7 @@ sub set_constants {                          # {{{1
 'Python'  => 4.20,
 'Ruby'    => 4.20,
 'sed'     => 4.00,
+'lua'     => 4.00,
 );
 # 1}}}
 } # end sub set_constants()
@@ -2918,7 +2982,7 @@ pattern name   => [qw( quoted -esc=\\ )],
 EOD
 # 2}}}
     my $problems                = 0;
-    $Regexp_Common_Is_Installed = 0;
+    $HAVE_Rexexp_Common = 0;
     my $dir = tempdir( CLEANUP => 0 );  # 1 = delete on exit
     print "Using temp dir [$dir] to install Regexp::Common\n" unless $opt_quiet;
     my $Regexp_dir        = "$dir/Regexp";
@@ -2939,12 +3003,12 @@ EOD
 
     push @INC, $dir;
     eval "use Regexp::Common qw /comment RE_comment_HTML/";
-    $Regexp_Common_Is_Installed = 1 unless $problems;
+    $HAVE_Rexexp_Common = 1 unless $problems;
 } # 1}}}
 sub call_regexp_common {                     # {{{1
     my ($ra_lines, $language ) = @_;
 
-    Install_Regexp_Common() unless $Regexp_Common_Is_Installed;
+    Install_Regexp_Common() unless $HAVE_Rexexp_Common;
 
     print "-> call_regexp_common\n" if $opt_v > 2;
 
