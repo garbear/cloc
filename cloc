@@ -27,7 +27,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 # 1}}}
-my $VERSION = 0.67;
+my $VERSION = 0.68;
 require 5.006;
 # use modules                                  {{{1
 use warnings;
@@ -37,6 +37,7 @@ use File::Basename;
 use File::Temp qw { tempfile tempdir };
 use File::Find;
 use IO::File;
+
 # Digest::MD5 isn't in the standard distribution. Use it only if installed.
 my $HAVE_Digest_MD5;
 BEGIN {
@@ -44,8 +45,10 @@ BEGIN {
         $HAVE_Digest_MD5 = 1;
     } else {
         $HAVE_Digest_MD5 = 0;
+        warn "Digest::MD5 not installed; will skip file uniqueness checks.\n";
     }
 }
+
 # Regexp::Common also isn't in the standard distribution.  It will
 # be installed in a temp directory if necessary.
 my $HAVE_Rexexp_Common;
@@ -205,16 +208,19 @@ if ($opt_read_lang_def) {
         \%Scale_Factor         , # Scale_Factor{Perl}          = 4.0
         );
 }
+# 1}}}
+# Step 2:  Early exits for display, summation. {{{1
+#
 print_extension_info($opt_show_ext ) if defined $opt_show_ext ;
 print_language_info( $opt_show_lang) if defined $opt_show_lang;
 exit if (defined $opt_show_ext) or (defined $opt_show_lang);
 if ($opt_sum_reports) {
     my %Results = ();
     foreach my $type( "by language", "by report file" ) {
-        combine_results(\@ARGV, 
-                         $type, 
-                        \%{$Results{ $type }}, 
-                        \%Filters_by_Language );
+        my $found_lang = combine_results(\@ARGV, 
+                                          $type, 
+                                         \%{$Results{ $type }}, 
+                                         \%Filters_by_Language );
         next unless %Results;
         my $end_time = time();
         my @results  = generate_report($VERSION, $end_time - $start_time,
@@ -223,6 +229,7 @@ if ($opt_sum_reports) {
         if ($opt_report_file) {
             my $ext  = ".lang";
                $ext  = ".file" unless $type eq "by language";
+            next if !$found_lang and  $ext  eq ".lang";
             write_file($opt_report_file . $ext, @results);
         } else {
             print "\n", join("\n", @results), "\n";
@@ -243,7 +250,7 @@ if ($opt_write_lang_def) {
     exit;
 }
 # 1}}}
-# Step 2:  Create a list of files to consider. {{{1
+# Step 3:  Create a list of files to consider. {{{1
 #  a) If inputs are binary archives, first cd to a temp
 #     directory, expand the archive with the user-given
 #     extraction tool, then add the temp directory to
@@ -284,7 +291,7 @@ my %Ignored   = ();  # files that are not counted (language not recognized or
                      # problems reading the file)
 my $fh = make_file_list(\@ARGV, \%Error_Codes, \@Errors, \%Ignored);
 # 1}}}
-# Step 3:  Remove duplicate files.             {{{1
+# Step 4:  Remove duplicate files.             {{{1
 #
 my %Language           = ();
 my %unique_source_file = ();
@@ -294,7 +301,7 @@ printf "%8d unique file%s.            \n",
     plural_form(scalar keys %unique_source_file) 
     unless $opt_quiet;
 # 1}}}
-# Step 4:  Count code, comments, blank lines.  {{{1
+# Step 5:  Count code, comments, blank lines.  {{{1
 #
 my %Results_by_Language = ();
 my %Results_by_File     = ();
@@ -338,7 +345,7 @@ my @ignored_reasons = map { "$_: $Ignored{$_}" } sort keys %Ignored;
 write_file($opt_ignored, @ignored_reasons   ) if $opt_ignored;
 write_file($opt_counted, sort keys %Language) if $opt_counted;
 # 1}}}
-# Step 5:  Print results.                      {{{1
+# Step 6:  Print results.                      {{{1
 #
 my $end_time = time();
 printf "%8d file%s ignored.\n", plural_form(scalar keys %Ignored) 
@@ -362,11 +369,15 @@ if ($opt_by_file) {
 # 1}}}
 
 sub combine_results {                        # {{{1
+    # returns 1 if the inputs are categorized by language
+    #         0 if no identifiable language was found
     my ($ra_report_files, # in
         $report_type    , # in  "by language" or "by report file"
         $rhh_count      , # out count{TYPE}{nFiles|code|blank|comment|scaled}
         $rhaa_Filters_by_Language , # in
        ) = @_;
+
+    my $found_language = 0;
 
     foreach my $file (@{$ra_report_files}) {
         my $IN = new IO::File $file, "r";
@@ -390,6 +401,7 @@ sub combine_results {                        # {{{1
                     next unless defined %{$rhaa_Filters_by_Language->{$1}};
                     # above test necessary to avoid trying to sum reports
                     # of reports (which have no language breakdown).
+                    $found_language = 1;
                     $rhh_count->{$1   }{'nFiles' } += $2;
                     $rhh_count->{$1   }{'blank'  } += $3;
                     $rhh_count->{$1   }{'comment'} += $4;
@@ -405,6 +417,7 @@ sub combine_results {                        # {{{1
             }
         }
     }
+    return $found_language;
 
 } # 1}}}
 sub generate_report {                        # {{{1
@@ -1079,24 +1092,6 @@ sub write_file {                             # {{{1
     print "Wrote $file\n";
     
     print "<- write_file\n" if $opt_v > 2;
-} # 1}}}
-sub remove_c_comments {                      # {{{1
-    my ($ra_lines, ) = @_;
-
-    # DON'T USE THIS!  Can causes Perl < v5.8.8 to seg fault.
-    #                  Use the Regexp::Common::Common C filter instead.
-
-    # http://search.cpan.org/~jhi/perl-5.8.0/pod/perlfaq6.pod#How_do_I_use_a_regular_expression_to_strip_C_style_comments_from_a_file%3F
-
-    print "-> remove_c_comments\n" if $opt_v > 2;
-
-    my $all_lines = join("", @{$ra_lines});
-
-    no warnings;  # else "Use of uninitialized value in substitution iterator"
-    $all_lines =~ s#/\*[^*]*\*+([^/*][^*]*\*+)*/|("(\\.|[^"\\])*"|'(\\.|[^'\\])*'|.[^/"'\\]*)#$2#gs;
-
-    print "<- remove_c_comments\n" if $opt_v > 2;
-    return split("\n", $all_lines);
 } # 1}}}
 sub remove_f77_comments {                    # {{{1
     my ($ra_lines, ) = @_;
@@ -2981,7 +2976,7 @@ pattern name   => [qw( quoted -esc=\\ )],
 #            (see http://www.perl.com/perl/misc/Artistic.html)
 EOD
 # 2}}}
-    my $problems                = 0;
+    my $problems        = 0;
     $HAVE_Rexexp_Common = 0;
     my $dir = tempdir( CLEANUP => 0 );  # 1 = delete on exit
     print "Using temp dir [$dir] to install Regexp::Common\n" unless $opt_quiet;
