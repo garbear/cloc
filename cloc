@@ -27,7 +27,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 # 1}}}
-my $VERSION = 0.68;
+my $VERSION = 0.69;
 require 5.006;
 # use modules                                  {{{1
 use warnings;
@@ -39,14 +39,12 @@ use File::Find;
 use IO::File;
 
 # Digest::MD5 isn't in the standard distribution. Use it only if installed.
-my $HAVE_Digest_MD5;
-BEGIN {
-    if (eval "use Digest::MD5;") {
-        $HAVE_Digest_MD5 = 1;
-    } else {
-        $HAVE_Digest_MD5 = 0;
-        warn "Digest::MD5 not installed; will skip file uniqueness checks.\n";
-    }
+my $HAVE_Digest_MD5 = 0;
+eval "use Digest::MD5;";
+if (defined $Digest::MD5::VERSION) {
+    $HAVE_Digest_MD5 = 1;
+} else {
+    warn "Digest::MD5 not installed; will skip file uniqueness checks.\n";
 }
 
 # Regexp::Common also isn't in the standard distribution.  It will
@@ -170,7 +168,8 @@ my %Exclude_Dir      = ();
 # Options defaults:
 $opt_progress_rate = 100 unless $opt_progress_rate;
 $opt_v             =   0 unless $opt_v;
-die $usage unless defined $opt_show_lang       or
+die $usage unless defined $opt_version         or
+                  defined $opt_show_lang       or
                   defined $opt_show_ext        or
                   defined $opt_write_lang_def  or
                   scalar @ARGV >= 1;
@@ -211,6 +210,10 @@ if ($opt_read_lang_def) {
 # 1}}}
 # Step 2:  Early exits for display, summation. {{{1
 #
+if ($opt_version) {
+    print "$VERSION\n";
+    exit;
+}
 print_extension_info($opt_show_ext ) if defined $opt_show_ext ;
 print_language_info( $opt_show_lang) if defined $opt_show_lang;
 exit if (defined $opt_show_ext) or (defined $opt_show_lang);
@@ -837,20 +840,28 @@ sub is_file {                                # {{{1
     # (-f doesn't work in ActiveState Perl on Windows)
     my $item = shift @_;
 
-    my $mode = (stat $item)[2];
-       $mode = 0 unless $mode;
-    if ($mode & 0100000) { return 1; } 
-    else                 { return 0; }
+    if ($^O =~ /^MSWin/) {
+        my $mode = (stat $item)[2];
+           $mode = 0 unless $mode;
+        if ($mode & 0100000) { return 1; } 
+        else                 { return 0; }
+    } else {
+        return (-f $item);  # works on Unix, Linux, CygWin, z/OS
+    }
 } # 1}}}
 sub is_dir {                                 # {{{1
     # portable method to test if item is a directory
     # (-d doesn't work in ActiveState Perl on Windows)
     my $item = shift @_;
 
-    my $mode = (stat $item)[2];
-       $mode = 0 unless $mode;
-    if ($mode & 0040000) { return 1; } 
-    else                 { return 0; }
+    if ($^O =~ /^MSWin/) {
+        my $mode = (stat $item)[2];
+           $mode = 0 unless $mode;
+        if ($mode & 0040000) { return 1; } 
+        else                 { return 0; }
+    } else {
+        return (-d $item);  # works on Unix, Linux, CygWin, z/OS
+    }
 } # 1}}}
 sub classify_file {                          # {{{1
     my ($full_file   , # in
@@ -3372,9 +3383,6 @@ sub really_is_php {                          # {{{1
  return $is_php;
 } # 1}}}
 __END__
-Other counting tools:
-    http://www.qsm.com/CodeCounters.html  (directory of tools)
-    http://www.cmcrossroads.com/bradapp/clearperl/sclc.html
 mode values (stat $item)[2]
        Unix    Windows
 file:  33188   33206
