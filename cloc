@@ -27,7 +27,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 # 1}}}
-my $VERSION = 0.70;
+my $VERSION = 0.71;
 require 5.006;
 # use modules                                  {{{1
 use warnings;
@@ -1837,7 +1837,7 @@ sub set_constants {                          # {{{1
     'culprit'                      =>   1.57,
     'cxpert'                       =>   1.63,
     'cygnet'                       =>   4.21,
-    'DAL'                          =>   1.00,
+    'DAL'                          =>   1.50,
     'data base default'            =>   2.00,
     'dataflex'                     =>   2.00,
     'datatrieve'                   =>   4.00,
