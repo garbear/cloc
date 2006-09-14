@@ -27,7 +27,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 # 1}}}
-my $VERSION = 0.71;
+my $VERSION = 0.70;
 require 5.006;
 # use modules                                  {{{1
 use warnings;
@@ -179,7 +179,7 @@ die $usage unless defined $opt_version         or
 my $nFiles_Found = 0;  # updated in make_file_list
 my (%Language_by_Extension, %Language_by_Script,
     %Filters_by_Language, %Not_Code_Extension, %Not_Code_Filename,
-    %Language_by_File, %Scale_Factor,
+    %Language_by_File, %Scale_Factor, %Known_Binary_Archives,
    );
 my %Error_Codes = ( 'Unable to read'              => -1,
                     'Neither file nor directory'  => -2, );
@@ -205,6 +205,7 @@ if ($opt_read_lang_def) {
         \%Not_Code_Extension   , # Not_Code_Extension{jpg}     = 1
         \%Not_Code_Filename    , # Not_Code_Filename{README}   = 1
         \%Scale_Factor         , # Scale_Factor{Perl}          = 4.0
+        \%Known_Binary_Archives, # Known_Binary_Archives{.tar} = 1
         );
 }
 # 1}}}
@@ -263,12 +264,13 @@ if ($opt_write_lang_def) {
 #     any file in a directory the user says to exclude.
 #  c) Determine the language for each file in the list.
 #
+my @binary_archive = ();
 if ($opt_extract_with) {
     my $cwd = cwd();
 #print "cwd main = [$cwd]\n";
     my @extract_location = ();
     foreach my $bin_file (@ARGV) {
-        my $extract_dir = tempdir( CLEANUP => 0 );  # 1 = delete on exit
+        my $extract_dir = tempdir( CLEANUP => 1 );  # 1 = delete on exit
         chdir $extract_dir;
         print "Using temp dir [$extract_dir] to extract $bin_file\n" 
             unless $opt_quiet;
@@ -280,12 +282,43 @@ if ($opt_extract_with) {
             $bin_file_full_path = File::Spec->catfile( $cwd, $bin_file );
 #print "bin_file_full_path (was rel) = [$bin_file_full_path]\n";
         }
-        (my $extract_cmd = $opt_extract_with ) =~ s/>FILE</$bin_file_full_path/g;
+        (my $extract_cmd = $opt_extract_with ) 
+            =~ s/>FILE</$bin_file_full_path/g;
         print  $extract_cmd, "\n";
         system $extract_cmd;
         push @extract_location, $extract_dir;
         chdir $cwd;
     }
+    # It is possible that the binary archive itself contains additional
+    # files compressed the same way (true for Java .ear files).  Go
+    # through all the files that were extracted, see if they are binary
+    # archives and try to extract them.  Lather, rinse, repeat.
+    my $binary_archives_exist = 1;
+    my $count_binary_archives = 0;
+    my $previous_count        = 0;
+    while ($binary_archives_exist) {
+        @binary_archive = ();
+        foreach my $dir (@extract_location) {
+            find(\&archive_files, $dir);  # populates global @binary_archive
+        }
+        foreach my $archive (@binary_archive) {
+            (my $extract_cmd = $opt_extract_with ) 
+                =~ s/>FILE</$archive/g;
+            my $extract_dir = tempdir( CLEANUP => 1 );  # 1 = delete on exit
+            chdir  $extract_dir;
+            print  $extract_cmd, "\n";
+            system $extract_cmd;
+            push @extract_location, $extract_dir;
+            unlink $archive;  # otherwise will be extracting it forever 
+        }
+        $count_binary_archives = scalar @binary_archive;
+        if ($count_binary_archives == $previous_count) {
+            $binary_archives_exist = 0;
+        }
+        $previous_count = $count_binary_archives;
+    }
+    chdir $cwd;
+
     @ARGV = @extract_location;
 }
 my @Errors    = ();
@@ -835,6 +868,13 @@ sub files {                                  # {{{1
     printf "%8d files\r", $nFiles_Found unless $nFiles_Found % $opt_progress_rate;
     push @file_list, $File::Find::name;
 } # 1}}}
+sub archive_files {                          # {{{1
+    # invoked by File::Find's find()  Populates global variable @binary_archive
+    foreach my $ext (keys %Known_Binary_Archives) {
+        push @binary_archive, $File::Find::name 
+            if $File::Find::name =~ m{$ext$};
+    }
+} # 1}}}
 sub is_file {                                # {{{1
     # portable method to test if item is a file
     # (-f doesn't work in ActiveState Perl on Windows)
@@ -1353,6 +1393,7 @@ sub set_constants {                          # {{{1
         $rh_Not_Code_Extension    , # out
         $rh_Not_Code_Filename     , # out
         $rh_Scale_Factor          , # out
+        $rh_Known_Binary_Archives , # out
        ) = @_;
 # 1}}}
 %{$rh_Language_by_Extension} = (                 # {{{1
@@ -2259,6 +2300,18 @@ sub set_constants {                          # {{{1
 'lua'     => 4.00,
 );
 # 1}}}
+%{$rh_Known_Binary_Archives} = (                 # {{{1
+            '.tar'     => 1 ,
+            '.tar.Z'   => 1 ,
+            '.tar.gz'  => 1 ,
+            '.tar.bz2' => 1 ,
+            '.zip'     => 1 ,
+            '.Zip'     => 1 ,
+            '.ZIP'     => 1 ,
+            '.ear'     => 1 ,  # Java
+            '.war'     => 1 ,  # contained within .ear
+            );
+# 1}}}
 } # end sub set_constants()
 sub Install_Regexp_Common {                  # {{{1
     # Installs portions of Damian Conway's & Abigail's Regexp::Common
@@ -3029,7 +3082,7 @@ EOD
 # 2}}}
     my $problems        = 0;
     $HAVE_Rexexp_Common = 0;
-    my $dir = tempdir( CLEANUP => 0 );  # 1 = delete on exit
+    my $dir = tempdir( CLEANUP => 1 );  # 1 = delete on exit
     print "Using temp dir [$dir] to install Regexp::Common\n" unless $opt_quiet;
     my $Regexp_dir        = "$dir/Regexp";
     my $Regexp_Common_dir = "$dir/Regexp/Common";
