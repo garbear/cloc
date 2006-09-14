@@ -840,7 +840,7 @@ sub is_file {                                # {{{1
     # (-f doesn't work in ActiveState Perl on Windows)
     my $item = shift @_;
 
-    if ($^O =~ /^MSWin/) {
+    if (($^O =~ /^MSWin/) or ($^O eq "Windows_NT")) {
         my $mode = (stat $item)[2];
            $mode = 0 unless $mode;
         if ($mode & 0100000) { return 1; } 
@@ -854,7 +854,7 @@ sub is_dir {                                 # {{{1
     # (-d doesn't work in ActiveState Perl on Windows)
     my $item = shift @_;
 
-    if ($^O =~ /^MSWin/) {
+    if (($^O =~ /^MSWin/) or ($^O eq "Windows_NT")) {
         my $mode = (stat $item)[2];
            $mode = 0 unless $mode;
         if ($mode & 0040000) { return 1; } 
