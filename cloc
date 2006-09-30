@@ -27,7 +27,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 # 1}}}
-my $VERSION = 0.71;
+my $VERSION = 0.72;
 require 5.006;
 # use modules                                  {{{1
 use warnings;
@@ -326,6 +326,8 @@ my @file_list = ();  # global variable updated in files()
 my %Ignored   = ();  # files that are not counted (language not recognized or
                      # problems reading the file)
 my $fh = make_file_list(\@ARGV, \%Error_Codes, \@Errors, \%Ignored);
+#        make_file_list populates global variable @file_list via call to 
+#        File::Find's find() which in turn calls files()
 # 1}}}
 # Step 4:  Remove duplicate files.             {{{1
 #
@@ -3150,16 +3152,19 @@ sub matlab_or_objective_C {                  # {{{1
     # matlab markers:
     #   first line starts with "function"
     #   some lines start with "%"
+    #   high marks for lines that start with [
     #
     # Objective C markers:
+    #   must have at least two brace characters, { }
     #   has /* ... */ style comments
     #   some lines start with @
     #   some lines start with #include
     #
     # MUMPS:
     #   has ; comment markers
-    #   lines begin with   \s*\.?\w\s+\w
     #   do not match:  \w+\s*=\s*\w
+    #   lines begin with   \s*\.?\w+\s+\w
+    #   high marks for lines that start with \s*K\s+ or \s*Kill\s+
 
     ${$rs_language} = "";
     my $IN = new IO::File $file, "r";
@@ -3171,7 +3176,10 @@ sub matlab_or_objective_C {                  # {{{1
     my $matlab_points      = 0;
     my $objective_C_points = 0;
     my $mumps_points       = 0;
+    my $has_braces         = 0;
     while (<$IN>) {
+        ++$has_braces if m/[{}]/;
+        ++$mumps_points if $. == 1 and m{^[A-Z]};
         if      (m{^\s*/\*}) {           #   /*
             ++$objective_C_points;
             --$matlab_points;
@@ -3191,18 +3199,22 @@ sub matlab_or_objective_C {                  # {{{1
             last;
         } elsif (m{^\s*\[}) {             #   line starts with [  -- very matlab
             $matlab_points += 5;
+        } elsif (m{^\sK(ill)?\s+}) {
+            $mumps_points  += 5;
         } elsif (m{^\s*function}) {
             --$objective_C_points;
             ++$matlab_points;
         } elsif (m{^\s*%}) {              #   %
             --$objective_C_points;
             ++$matlab_points;
+            ++$mumps_points;
         }
     }
     $IN->close;
 
     print "<- matlab_or_objective_C(matlab=$matlab_points, C=$objective_C_points, mumps=$mumps_points)\n"
         if $opt_v > 2;
+    $objective_C_points = -9.9e20 unless $has_braces >= 2;
     if      (($matlab_points > $objective_C_points) and
              ($matlab_points > $mumps_points)      ) {
         ${$rs_language} = "MATLAB";
