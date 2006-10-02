@@ -716,6 +716,13 @@ sub print_language_info {                    # {{{1
             push @{$extensions{$Language_by_Extension{$ext}} }, $ext
         }
     }
+
+    # add exceptions (one file extension mapping to multiple languages)
+    push @{$extensions{'Objective C'}}, "m";
+    push @{$extensions{'MATLAB'}}     , "m";
+    push @{$extensions{'MUMPS'}}      , "m";
+    delete $extensions{'MATLAB/Objective C/MUMPS'};
+
     if (%extensions) {
         foreach my $lang (sort {lc $a cmp lc $b } keys %extensions) {
             printf "%-24s (%s)\n", $lang, join(", ", @{$extensions{$lang}});
