@@ -1014,8 +1014,8 @@ sub peek_at_first_line {                     # {{{1
     }
     chomp(my $first_line = <$IN>);
     if (defined $first_line) {
-#print "peek_at_first_line first_line=$first_line\n";
-        if ($first_line =~ /^#\!(.*?)$/) {
+#print "peek_at_first_line of [$file] first_line=[$first_line]\n";
+        if ($first_line =~ /^#\!\s*(\S.*?)$/) {
             my @pound_bang = split(' ', $1);
 #print "peek_at_first_line basename 0=[", basename($pound_bang[0]), "]\n";
             if (basename($pound_bang[0]) eq "env" and 
