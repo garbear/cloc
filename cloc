@@ -27,7 +27,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 # 1}}}
-my $VERSION = 0.73;
+my $VERSION = 0.74;
 require 5.006;
 # use modules                                  {{{1
 use warnings;
@@ -47,9 +47,9 @@ if (defined $Digest::MD5::VERSION) {
     warn "Digest::MD5 not installed; will skip file uniqueness checks.\n";
 }
 
+my $HAVE_Rexexp_Common;
 # Regexp::Common also isn't in the standard distribution.  It will
 # be installed in a temp directory if necessary.
-my $HAVE_Rexexp_Common;
 BEGIN {
     if (eval "use Regexp::Common;") {
         $HAVE_Rexexp_Common = 1;
@@ -57,6 +57,35 @@ BEGIN {
         $HAVE_Rexexp_Common = 0;
     }
 }
+
+# Uncomment the following block when building Windows exe with perl2exe.
+# use Regexp::Common;
+# $HAVE_Rexexp_Common = 1;
+# #perl2exe_include "Regexp/Common/whitespace.pm"
+# #perl2exe_include "Regexp/Common/URI.pm"
+# #perl2exe_include "Regexp/Common/URI/fax.pm"
+# #perl2exe_include "Regexp/Common/URI/file.pm"
+# #perl2exe_include "Regexp/Common/URI/ftp.pm"
+# #perl2exe_include "Regexp/Common/URI/gopher.pm"
+# #perl2exe_include "Regexp/Common/URI/http.pm"
+# #perl2exe_include "Regexp/Common/URI/pop.pm"
+# #perl2exe_include "Regexp/Common/URI/prospero.pm"
+# #perl2exe_include "Regexp/Common/URI/news.pm"
+# #perl2exe_include "Regexp/Common/URI/tel.pm"
+# #perl2exe_include "Regexp/Common/URI/telnet.pm"
+# #perl2exe_include "Regexp/Common/URI/tv.pm"
+# #perl2exe_include "Regexp/Common/URI/wais.pm"
+# #perl2exe_include "Regexp/Common/CC.pm"
+# #perl2exe_include "Regexp/Common/SEN.pm"
+# #perl2exe_include "Regexp/Common/number.pm"
+# #perl2exe_include "Regexp/Common/delimited.pm"
+# #perl2exe_include "Regexp/Common/profanity.pm"
+# #perl2exe_include "Regexp/Common/net.pm"
+# #perl2exe_include "Regexp/Common/zip.pm"
+# #perl2exe_include "Regexp/Common/comment.pm"
+# #perl2exe_include "Regexp/Common/balanced.pm"
+# #perl2exe_include "Regexp/Common/lingua.pm"
+# #perl2exe_include "Regexp/Common/list.pm"
 
 use Text::Tabs qw { expand };
 #use Data::Dumper::Simple;
@@ -273,7 +302,7 @@ if ($opt_extract_with) {
         my $extract_dir = tempdir( CLEANUP => 1 );  # 1 = delete on exit
         chdir $extract_dir;
         print "Using temp dir [$extract_dir] to extract $bin_file\n" 
-            unless $opt_quiet;
+            if $opt_v;
         my $bin_file_full_path = "";
         if (File::Spec->file_name_is_absolute( $bin_file )) {
             $bin_file_full_path = $bin_file;
@@ -743,7 +772,7 @@ sub make_file_list {                         # {{{1
         die "Unable to write to $filename:  $!\n" unless defined $fh;
     } else {
         ($fh, $filename) = tempfile(UNLINK => 1);  # delete file on exit
-        print "Using temp file list [$filename]\n" unless $opt_quiet;
+        print "Using temp file list [$filename]\n" if $opt_v;
     }
 
     my @dir_list = ();
@@ -1016,6 +1045,7 @@ sub peek_at_first_line {                     # {{{1
     if (defined $first_line) {
 #print "peek_at_first_line of [$file] first_line=[$first_line]\n";
         if ($first_line =~ /^#\!\s*(\S.*?)$/) {
+#print "peek_at_first_line 1=[$1]\n";
             my @pound_bang = split(' ', $1);
 #print "peek_at_first_line basename 0=[", basename($pound_bang[0]), "]\n";
             if (basename($pound_bang[0]) eq "env" and 
@@ -3092,7 +3122,7 @@ EOD
     my $problems        = 0;
     $HAVE_Rexexp_Common = 0;
     my $dir = tempdir( CLEANUP => 1 );  # 1 = delete on exit
-    print "Using temp dir [$dir] to install Regexp::Common\n" unless $opt_quiet;
+    print "Using temp dir [$dir] to install Regexp::Common\n" if $opt_v;
     my $Regexp_dir        = "$dir/Regexp";
     my $Regexp_Common_dir = "$dir/Regexp/Common";
     mkdir $Regexp_dir       ;
