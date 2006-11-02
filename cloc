@@ -27,7 +27,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 # 1}}}
-my $VERSION = 0.74;
+my $VERSION = 0.75;
 require 5.006;
 # use modules                                  {{{1
 use warnings;
@@ -58,34 +58,35 @@ BEGIN {
     }
 }
 
-# Uncomment the following block when building Windows exe with perl2exe.
-# use Regexp::Common;
-# $HAVE_Rexexp_Common = 1;
-# #perl2exe_include "Regexp/Common/whitespace.pm"
-# #perl2exe_include "Regexp/Common/URI.pm"
-# #perl2exe_include "Regexp/Common/URI/fax.pm"
-# #perl2exe_include "Regexp/Common/URI/file.pm"
-# #perl2exe_include "Regexp/Common/URI/ftp.pm"
-# #perl2exe_include "Regexp/Common/URI/gopher.pm"
-# #perl2exe_include "Regexp/Common/URI/http.pm"
-# #perl2exe_include "Regexp/Common/URI/pop.pm"
-# #perl2exe_include "Regexp/Common/URI/prospero.pm"
-# #perl2exe_include "Regexp/Common/URI/news.pm"
-# #perl2exe_include "Regexp/Common/URI/tel.pm"
-# #perl2exe_include "Regexp/Common/URI/telnet.pm"
-# #perl2exe_include "Regexp/Common/URI/tv.pm"
-# #perl2exe_include "Regexp/Common/URI/wais.pm"
-# #perl2exe_include "Regexp/Common/CC.pm"
-# #perl2exe_include "Regexp/Common/SEN.pm"
-# #perl2exe_include "Regexp/Common/number.pm"
-# #perl2exe_include "Regexp/Common/delimited.pm"
-# #perl2exe_include "Regexp/Common/profanity.pm"
-# #perl2exe_include "Regexp/Common/net.pm"
-# #perl2exe_include "Regexp/Common/zip.pm"
-# #perl2exe_include "Regexp/Common/comment.pm"
-# #perl2exe_include "Regexp/Common/balanced.pm"
-# #perl2exe_include "Regexp/Common/lingua.pm"
-# #perl2exe_include "Regexp/Common/list.pm"
+if (0) {  # set to 1 when building Windows exe with perl2exe
+use Regexp::Common;
+$HAVE_Rexexp_Common = 1;
+}
+#perl2exe_include "Regexp/Common/whitespace.pm"
+#perl2exe_include "Regexp/Common/URI.pm"
+#perl2exe_include "Regexp/Common/URI/fax.pm"
+#perl2exe_include "Regexp/Common/URI/file.pm"
+#perl2exe_include "Regexp/Common/URI/ftp.pm"
+#perl2exe_include "Regexp/Common/URI/gopher.pm"
+#perl2exe_include "Regexp/Common/URI/http.pm"
+#perl2exe_include "Regexp/Common/URI/pop.pm"
+#perl2exe_include "Regexp/Common/URI/prospero.pm"
+#perl2exe_include "Regexp/Common/URI/news.pm"
+#perl2exe_include "Regexp/Common/URI/tel.pm"
+#perl2exe_include "Regexp/Common/URI/telnet.pm"
+#perl2exe_include "Regexp/Common/URI/tv.pm"
+#perl2exe_include "Regexp/Common/URI/wais.pm"
+#perl2exe_include "Regexp/Common/CC.pm"
+#perl2exe_include "Regexp/Common/SEN.pm"
+#perl2exe_include "Regexp/Common/number.pm"
+#perl2exe_include "Regexp/Common/delimited.pm"
+#perl2exe_include "Regexp/Common/profanity.pm"
+#perl2exe_include "Regexp/Common/net.pm"
+#perl2exe_include "Regexp/Common/zip.pm"
+#perl2exe_include "Regexp/Common/comment.pm"
+#perl2exe_include "Regexp/Common/balanced.pm"
+#perl2exe_include "Regexp/Common/lingua.pm"
+#perl2exe_include "Regexp/Common/list.pm"
 
 use Text::Tabs qw { expand };
 #use Data::Dumper::Simple;
@@ -1230,6 +1231,44 @@ sub remove_matches {                         # {{{1
     print "<- remove_matches\n" if $opt_v > 2;
     return @save_lines;
 } # 1}}}
+sub remove_above {                           # {{{1
+    my ($ra_lines, $marker, ) = @_;
+    print "-> remove_above(marker=$marker)\n" if $opt_v > 2;
+
+    # Make two passes through the code:
+    # 1. check if the marker exists
+    # 2. remove anything above the marker if it exists,
+    #    do nothing if the marker does not exist
+
+    # Pass 1
+    my $found_marker = 0;
+    for (my $line_number  = 1;
+            $line_number <= scalar @{$ra_lines};
+            $line_number++) {
+        if ($ra_lines->[$line_number-1] =~ m{$marker}) {
+            $found_marker = $line_number;
+            last;
+        }
+    }
+
+    # Pass 2 only if needed
+    my @save_lines = ();
+    if ($found_marker) {
+        my $n = 1;
+        foreach (@{$ra_lines}) {
+            push @save_lines, $_
+                if $n >= $found_marker;
+            ++$n;
+        }
+    } else { # marker wasn't found; save all lines
+        foreach (@{$ra_lines}) {
+            push @save_lines, $_;
+        }
+    }
+
+    print "<- remove_above\n" if $opt_v > 2;
+    return @save_lines;
+} # 1}}}
 sub remove_below {                           # {{{1
     my ($ra_lines, $marker, ) = @_;
     print "-> remove_below(marker=$marker)\n" if $opt_v > 2;
@@ -1555,7 +1594,7 @@ sub set_constants {                          # {{{1
             'tcsh'        => 'C Shell'               ,
             'tk'          => 'Tcl/Tk'                ,
             'vba'         => "Visual Basic"          ,
-            'vbp'         => "Visual Basic"          ,
+         #  'vbp'         => "Visual Basic"          ,
             'vb'          => "Visual Basic"          ,
             'vbw'         => "Visual Basic"          ,
             'webinfo'     => 'ASP.Net'               ,
@@ -1565,6 +1604,8 @@ sub set_constants {                          # {{{1
             "xsl"         => "XSL"                   ,
             'y'           => 'yacc'                  ,
             );
+# Notes:  .vbp is Visual Basic, but it is an autogenerated
+#         file and so its contents are not of interest
 # 1}}}
 %{$rh_Language_by_Script}    = (                 # {{{1
             'awk'      => 'awk'                   ,
@@ -1678,7 +1719,8 @@ sub set_constants {                          # {{{1
     'Teamcenter def'     => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'Teamcenter met'     => [   [ 'call_regexp_common'  , 'C'      ], ],
     'Teamcenter mth'     => [   [ 'remove_matches'      , '^\s*#'  ], ], 
-    'Visual Basic'       => [   [ 'remove_matches'      , '^\s*\47'], ],  # \47 = '
+    'Visual Basic'       => [   [ 'remove_above'        , '^\s*Attribute\s+VB_Name\s+=' ],               
+                                [ 'remove_matches'      , '^\s*\47'], ],  # \47 = '
     'yacc'               => [   [ 'call_regexp_common'  , 'C'      ], ], 
     'lex'                => [   [ 'call_regexp_common'  , 'C'      ], ], 
     'XML'                => [   [ 'call_regexp_common'  , 'HTML'   ], ],
