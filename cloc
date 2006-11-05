@@ -58,10 +58,10 @@ BEGIN {
     }
 }
 
-if (0) {  # set to 1 when building Windows exe with perl2exe
-use Regexp::Common;
-$HAVE_Rexexp_Common = 1;
-}
+#if (0) {  # set to 1 when building Windows exe with perl2exe
+#use Regexp::Common;
+#$HAVE_Rexexp_Common = 1;
+#}
 #perl2exe_include "Regexp/Common/whitespace.pm"
 #perl2exe_include "Regexp/Common/URI.pm"
 #perl2exe_include "Regexp/Common/URI/fax.pm"
