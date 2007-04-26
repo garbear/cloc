@@ -27,7 +27,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 # 1}}}
-my $VERSION = 0.76;
+my $VERSION = 0.80;
 require 5.006;
 # use modules                                  {{{1
 use warnings;
@@ -36,6 +36,7 @@ use Getopt::Long;
 use File::Basename;
 use File::Temp qw { tempfile tempdir };
 use File::Find;
+use File::Path;
 use IO::File;
 
 # Digest::MD5 isn't in the standard distribution. Use it only if installed.
@@ -58,10 +59,11 @@ BEGIN {
     }
 }
 
-#if (0) {  # set to 1 when building Windows exe with perl2exe
+# Uncomment next two lines when building Windows executable with perl2exe
+# or if running on a system that already has Regexp::Common.
 #use Regexp::Common;
 #$HAVE_Rexexp_Common = 1;
-#}
+
 #perl2exe_include "Regexp/Common/whitespace.pm"
 #perl2exe_include "Regexp/Common/URI.pm"
 #perl2exe_include "Regexp/Common/URI/fax.pm"
@@ -124,6 +126,14 @@ Usage: $script [options] <file(s)/dir(s)> | <report files>
                              and on Windows use: 
                                --extract_with=\"\\\"c:\\Program Files\\WinZip\\WinZip32.exe\\\" -e -o >FILE< .\"
                              (if you have WinZip installed there).
+   --force_lang=<lang>,<ext> Process all files that have a <ext> extension 
+                             with the counter for language <lang>.  For 
+                             example, to count all .f files with the 
+                             Fortran 90 counter (which expects files to 
+                             end with .f90) instead of the default Fortran 77 
+                             counter, use
+                               --force_lang=\"Fortran 90\",f
+                             This option can be specified multiple times.
    --found=<file>            Save names of every file found to <file>.
    --ignored=<file>          Save names of ignored files and the reason they
                              were ignored to <file>.
@@ -153,6 +163,7 @@ Usage: $script [options] <file(s)/dir(s)> | <report files>
    --write_lang_def=<file>   Writes to <file. the language processing filters
                              then exits.  Useful as a first step to creating
                              custom language definitions (see --read_lang_def).
+   --xml                     Write the results in XML.
    -v[=<n>]                  Verbose switch (optional numeric value).
    --version                 Print the version of this program and exit.
 
@@ -165,7 +176,8 @@ my ($opt_found, $opt_categorized, $opt_ignored,
     $opt_exclude_lang, $opt_exclude_dir, 
     $opt_read_lang_def, $opt_write_lang_def,
     $opt_strip_comments, $opt_quiet, $opt_report_file, $opt_sum_reports,
-    $opt_extract_with, $opt_by_file,
+    $opt_extract_with, $opt_by_file, $opt_xml,
+    @opt_force_lang,
    );
 GetOptions(
            "by_file"             => \$opt_by_file             ,
@@ -188,7 +200,10 @@ GetOptions(
            "v:i"                 => \$opt_v                   ,
            "version"             => \$opt_version             ,
            "write_lang_def=s"    => \$opt_write_lang_def      ,
+           "xml"                 => \$opt_xml                 ,
+           "force_lang=s"        => \@opt_force_lang          ,
           );
+
 my %Exclude_Language = ();
    %Exclude_Language = map { $_ => 1 } split(/,/, $opt_exclude_lang) 
         if $opt_exclude_lang;
@@ -206,6 +221,9 @@ die $usage unless defined $opt_version         or
 # 1}}}
 # Step 1:  Initialize global constants.        {{{1
 #
+my $ON_WINDOWS = 0;
+   $ON_WINDOWS = 1 if ($^O =~ /^MSWin/) or ($^O eq "Windows_NT");
+
 my $nFiles_Found = 0;  # updated in make_file_list
 my (%Language_by_Extension, %Language_by_Script,
     %Filters_by_Language, %Not_Code_Extension, %Not_Code_Filename,
@@ -238,6 +256,17 @@ if ($opt_read_lang_def) {
         \%Known_Binary_Archives, # Known_Binary_Archives{.tar} = 1
         );
 }
+
+# Process command line provided extention-to-language mapping overrides.
+foreach my $pair (@opt_force_lang) {
+    my ($language, $extension) = split(',', $pair);
+    die "Unknown language '$language' used with --force_lang option.  The command\n" .
+        "  $script --show_lang\n" .
+        "will print all recognized languages.\n" 
+        unless defined @{$Filters_by_Language{$language}};
+    $Language_by_Extension{$extension} = $language;
+}
+
 # 1}}}
 # Step 2:  Early exits for display, summation. {{{1
 #
@@ -371,6 +400,7 @@ printf "%8d unique file%s.            \n",
 # 1}}}
 # Step 5:  Count code, comments, blank lines.  {{{1
 #
+
 my %Results_by_Language = ();
 my %Results_by_File     = ();
 my $nCounted = 0;
@@ -421,16 +451,29 @@ printf "%8d file%s ignored.\n", plural_form(scalar keys %Ignored)
 print_errors(\%Error_Codes, \@Errors) if @Errors;
 exit unless %Results_by_Language;
 
-my @results = generate_report($VERSION, $end_time - $start_time,
+my @results = ();
+unless ($opt_by_file) {
+    if ($opt_xml) {
+        @results = generate_report_xml($VERSION, $end_time - $start_time,
+                            "by language",
+                            \%Results_by_Language, \%Scale_Factor);
+    } else {
+        @results = generate_report($VERSION, $end_time - $start_time,
                               "by language",
                              \%Results_by_Language, \%Scale_Factor);
-if ($opt_report_file) { write_file($opt_report_file, @results); } 
-else                  { print "\n", join("\n", @results), "\n"; }
-
-if ($opt_by_file) {
-    my @results = generate_report($VERSION, $end_time - $start_time,
-                                  "by file",
-                                 \%Results_by_File, \%Scale_Factor);
+    }
+    if ($opt_report_file) { write_file($opt_report_file, @results); } 
+    else                  { print "\n", join("\n", @results), "\n"; }
+} else {
+    if ($opt_xml) {
+        @results = generate_report_xml($VERSION, $end_time - $start_time,
+                            "by file",
+                            \%Results_by_File, \%Scale_Factor);
+    } else {
+        @results = generate_report($VERSION, $end_time - $start_time,
+                              "by file",
+                             \%Results_by_File, \%Scale_Factor);
+    }
     if ($opt_report_file) { write_file($opt_report_file, @results); } 
     else                  { print "\n", join("\n", @results), "\n"; }
 }
@@ -610,6 +653,134 @@ sub generate_report {                        # {{{1
     push @results, $data_line;
     push @results, $hypen_line;
 
+    return @results;
+} # 1}}}
+sub generate_report_xml {                    # {{{1
+    # returns an array of lines containing the results
+    # This subroutine contributed by Anton Demichev.
+    my ($version    , # in
+        $elapsed_sec, # in
+        $report_type, # in  "by language" | "by report file" | "by file"
+        $rhh_count  , # in  count{TYPE}{nFiles|code|blank|comment|scaled}
+        $rh_scale   , # in
+       ) = @_;
+
+    my @results       = ();
+    
+    my $languages     = ();
+
+    my $sum_files     = 0;
+    my $sum_code      = 0;
+    my $sum_blank     = 0;
+    my $sum_comment   = 0;
+    foreach my $language (keys %{$rhh_count}) {
+        $sum_files   += $rhh_count->{$language}{'nFiles'} ;
+        $sum_blank   += $rhh_count->{$language}{'blank'}  ;
+        $sum_comment += $rhh_count->{$language}{'comment'};
+        $sum_code    += $rhh_count->{$language}{'code'}   ;
+    }
+    my $sum_lines = $sum_blank + $sum_comment + $sum_code;
+    $elapsed_sec = 0.5 unless $elapsed_sec;
+
+    my $URL        = "http://cloc.sourceforge.net";
+    my $data_line  = "";
+    my $first_column;
+    my $BY_LANGUAGE = 0;
+    my $BY_FILE     = 0;
+    if      ($report_type eq "by language") {
+        $first_column = "Language";
+        $BY_LANGUAGE  = 1;
+    } elsif ($report_type eq "by file")     {
+        $first_column = "File";
+        $BY_FILE      = 1;
+    } else {
+        $first_column = "Report File";
+    }
+
+    my $header_line  = sprintf "%s v %4.2f", $URL, $version;
+       $header_line .= sprintf("  T=%.1f s (%.1f files/s, %.1f lines/s)",
+                        $elapsed_sec           ,
+                        $sum_files/$elapsed_sec,
+                        $sum_lines/$elapsed_sec) unless $opt_sum_reports;
+    push @results, "<?xml version=\"1.0\"?>";
+    push @results, "<results>";
+    
+    push @results, "<header>$header_line</header>";
+
+    my $sum_scaled = 0;
+    foreach my $lang_or_file (sort {
+                                 $rhh_count->{$b}{'code'} <=>
+                                 $rhh_count->{$a}{'code'}
+                               }
+                          keys %{$rhh_count}) {
+        my ($factor, $scaled);
+        if ($BY_LANGUAGE or $BY_FILE) {
+            $factor = 1;
+            if ($BY_LANGUAGE) {
+                if (defined $rh_scale->{$lang_or_file}) {
+                    $factor = $rh_scale->{$lang_or_file};
+                } else {
+                    warn "No scale factor for $lang_or_file; using 1.00";
+                }
+            } else { # by individual code file
+                $factor = $rh_scale->{$rhh_count->{$lang_or_file}{'lang'}};
+            }
+            $scaled = $factor*$rhh_count->{$lang_or_file}{'code'};
+        } else {
+            $scaled =         $rhh_count->{$lang_or_file}{'scaled'};
+            $factor = $scaled/$rhh_count->{$lang_or_file}{'code'};
+        }
+        if ($BY_FILE) {
+            $data_line  = sprintf "name=\"%s\" ", $lang_or_file;
+        } else {
+            $data_line  = sprintf "name=\"%s\" ", $lang_or_file;
+        }
+        $data_line .= sprintf "files_count=\"%d\" ", $rhh_count->{$lang_or_file}{'nFiles'}
+            unless $BY_FILE;
+        $data_line .= sprintf "blank=\"%d\" comment=\"%d\" code=\"%d\" factor=\"%.2f\" scaled=\"%.2f\" ",
+            $rhh_count->{$lang_or_file}{'blank'}  ,
+            $rhh_count->{$lang_or_file}{'comment'},
+            $rhh_count->{$lang_or_file}{'code'}   ,
+            $factor                           ,
+            $scaled                           ;
+        $sum_scaled  += $scaled;
+        
+        if ($rhh_count->{$lang_or_file}{'lang'}) {
+            my $lang = $rhh_count->{$lang_or_file}{'lang'};
+            if (!defined $languages->{$lang}) {
+                $languages->{$lang} = $lang;
+            }
+            $data_line.=" language=\"" . $lang . "\" ";
+        }
+        
+        if ($BY_FILE) {
+            push @results, "<file " . $data_line . "/>";
+        } else {
+            push @results, "<language " . $data_line . "/>";
+        }
+    }
+    my $avg_scale = 1;  # weighted average of scale factors
+       $avg_scale = $sum_scaled / $sum_code if $sum_code;
+    
+    $data_line = "";
+    if (!$BY_FILE) {
+        $data_line .= sprintf "sum_files=\"%d\" ", $sum_files;
+    }
+    $data_line .= sprintf "blank=\"%d\" comment=\"%d\" code=\"%d\" factor=\"%.2f\" scaled=\"%.2f\" ",
+        $sum_blank   ,
+        $sum_comment ,
+        $sum_code    ,
+        $avg_scale   ,
+        $sum_scaled  ;
+    push @results, "<total " . $data_line . "/>";
+    push @results, "<languages>";
+    
+    foreach my $language (keys %{$languages}) {
+        push @results, "<language name=\"".$language."\"/>";
+    }
+    
+    push @results, "</languages>";
+    push @results, "</results>";
     return @results;
 } # 1}}}
 sub print_errors {                           # {{{1
@@ -795,7 +966,7 @@ sub make_file_list {                         # {{{1
             push @{$raa_errors}, [$rh_Err->{'Unable to read'} , $file_or_dir];
             next;
         }
-        if      (is_file($file_or_dir)) {
+        if (is_file($file_or_dir)) {
             if (!(-s $file_or_dir)) {   # 0 sized file, named pipe, socket 
                 $rh_ignored->{$file_or_dir} = 'zero sized file';
                 next;
@@ -879,7 +1050,7 @@ sub remove_duplicate_files {                 # {{{1
     $n = 0;
     foreach my $bytes (sort {$a <=> $b} keys %files_by_size) {
         ++$n;
-        printf "Unique: %8d files                               \r", 
+        printf "Unique: %8d files                              \r", 
             $n unless $n % $opt_progress_rate;
         $rh_unique_source_file->{$files_by_size{$bytes}[0]} = 1;
         next unless scalar @{$files_by_size{$bytes}} > 1;
@@ -930,7 +1101,7 @@ sub is_file {                                # {{{1
     # (-f doesn't work in ActiveState Perl on Windows)
     my $item = shift @_;
 
-    if (($^O =~ /^MSWin/) or ($^O eq "Windows_NT")) {
+    if ($ON_WINDOWS) {
         my $mode = (stat $item)[2];
            $mode = 0 unless $mode;
         if ($mode & 0100000) { return 1; } 
@@ -944,7 +1115,7 @@ sub is_dir {                                 # {{{1
     # (-d doesn't work in ActiveState Perl on Windows)
     my $item = shift @_;
 
-    if (($^O =~ /^MSWin/) or ($^O eq "Windows_NT")) {
+    if ($ON_WINDOWS) {
         my $mode = (stat $item)[2];
            $mode = 0 unless $mode;
         if ($mode & 0040000) { return 1; } 
@@ -1183,6 +1354,11 @@ sub write_file {                             # {{{1
 
     print "-> write_file($file)\n" if $opt_v > 2;
 
+    # Create the destination directory if it doesn't already exist.
+    my $abs_file_path = File::Spec->rel2abs( $file );
+    my ($volume, $directories, $filename) = File::Spec->splitpath( $abs_file_path );
+    mkpath($volume . $directories, 1, 0777);
+    
     my $OUT = new IO::File $file, "w";
     if (defined $OUT) {
         chomp(@lines);
@@ -1397,6 +1573,7 @@ sub remove_jsp_comments {                    # {{{1
         next if /^\s*$/;
         $in_comment = 1 if /^(.*?)<\%\-\-/;
         next if defined $1 and $1 =~ /^\s*$/;
+        next if ($in_comment);
         push @save_lines, $_;
     }
 
@@ -1498,6 +1675,8 @@ sub set_constants {                          # {{{1
             'asmx'        => 'ASP.Net'               ,
             'asp'         => 'ASP'                   ,
             'aspx'        => 'ASP.Net'               ,
+            'master'      => 'ASP.Net'               ,
+            'sitemap'     => 'ASP.Net'               ,
             'awk'         => 'awk'                   ,
             'bash'        => "Bourne Shell"          ,
             'bas'         => "Visual Basic"          ,
@@ -1518,6 +1697,7 @@ sub set_constants {                          # {{{1
             'cpp'         => 'C++'                   ,
             'cs'          => 'C#'                    ,
             'csh'         => 'C Shell'               ,
+            'css'         => "CSS"                   ,
             'cxx'         => 'C++'                   ,
             'da'          => 'DAL'                   ,
             'def'         => 'Teamcenter def'        ,
@@ -1569,6 +1749,8 @@ sub set_constants {                          # {{{1
             "mli"         => "ML"                    ,
             "ml"          => "ML"                    , 
             'm'           => 'MATLAB/Objective C/MUMPS' ,
+            'wdproj'      => 'MSBuild scripts' ,
+            'csproj'      => 'MSBuild scripts' ,
             "mps"         => "MUMPS"                 ,
             'mth'         => 'Teamcenter mth'        ,
             'pad'         => 'Ada'                   , # Oracle Ada preprocessor
@@ -1592,7 +1774,7 @@ sub set_constants {                          # {{{1
             'psql'        => 'SQL'                   ,
             'py'          => 'Python'                ,
             "rb"          => "Ruby"                  ,
-            'resx'        => 'ASP.Net'               ,
+         #  'resx'        => 'ASP.Net'               ,
             'rex'         => "Oracle Reports"        ,
             'rexx'        => "Rexx"                  ,
             's'           => 'Assembler'             ,
@@ -1609,11 +1791,13 @@ sub set_constants {                          # {{{1
          #  'vbp'         => "Visual Basic"          , # .vbp - autogenerated
             'vb'          => "Visual Basic"          ,
          #  'vbw'         => "Visual Basic"          , # .vbw - autogenerated
+            'vbs'         => "Visual Basic"          ,
             'webinfo'     => 'ASP.Net'               ,
             "xml"         => "XML"                   ,
+            "build"       => "NAnt scripts"          ,
             'xsd'         => "XSD"                   ,
             "xslt"        => "XSLT"                  ,
-            "xsl"         => "XSL"                   ,
+            "xsl"         => "XSLT"                   ,
             'y'           => 'yacc'                  ,
             );
 # 1}}}
@@ -1666,6 +1850,7 @@ sub set_constants {                          # {{{1
                                 [ 'call_regexp_common'  , 'C'      ],
                             ],
     'CCS'                => [   [ 'call_regexp_common'  , 'C'      ], ],
+    'CSS'                => [   [ 'call_regexp_common'  , 'C'      ], ],
     'COBOL'              => [   [ 'remove_cobol_comments',         ], ],
     'ColdFusion'         => [   [ 'call_regexp_common'  , 'HTML'   ], ],
     'Crystal Reports'    => [   [ 'remove_matches'      , '^\s*//' ], ],
@@ -1735,9 +1920,10 @@ sub set_constants {                          # {{{1
     'yacc'               => [   [ 'call_regexp_common'  , 'C'      ], ], 
     'lex'                => [   [ 'call_regexp_common'  , 'C'      ], ], 
     'XML'                => [   [ 'call_regexp_common'  , 'HTML'   ], ],
-    'XSL'                => [   [ 'call_regexp_common'  , 'HTML'   ], ],
     'XSD'                => [   [ 'call_regexp_common'  , 'HTML'   ], ],
     'XSLT'               => [   [ 'call_regexp_common'  , 'HTML'   ], ],
+    'NAnt scripts'       => [   [ 'call_regexp_common'  , 'HTML'   ], ],
+    'MSBuild scripts'    => [   [ 'call_regexp_common'  , 'HTML'   ], ],
     );
 # 1}}}
 %{$rh_Not_Code_Extension}    = (                 # {{{1
@@ -1887,7 +2073,7 @@ sub set_constants {                          # {{{1
 'ASP'                         =>   1.29,
 'ASP.Net'                     =>   1.29,
 'aspx'                        =>   1.29,
-'resx'                        =>   1.29,
+#'resx'                        =>   1.29,
 'asax'                        =>   1.29,
 'ascx'                        =>   1.29,
 'asmx'                        =>   1.29,
@@ -1967,6 +2153,9 @@ sub set_constants {                          # {{{1
     'csl'                          =>   1.63,
     'csp'                          =>   1.51,
     'cssl'                         =>   1.74,
+    
+'CSS' => 1.0,
+    
     'culprit'                      =>   1.57,
     'cxpert'                       =>   1.63,
     'cygnet'                       =>   4.21,
@@ -2052,12 +2241,13 @@ sub set_constants {                          # {{{1
     'hlevel'                       =>   1.38,
     'hp basic'                     =>   0.63,
 
-'HTML'     => 1.90 ,
-'XML'      => 1.90 ,
-'XSL'      => 1.90 ,
-'XSLT'     => 1.90 ,
-'DTD'      => 1.90 ,
-'XSD'      => 1.90 ,
+'HTML'          => 1.90 ,
+'XML'           => 1.90 ,
+'XSLT'          => 1.90 ,
+'DTD'           => 1.90 ,
+'XSD'           => 1.90 ,
+'NAnt scripts'    => 1.90 ,
+'MSBuild scripts' => 1.90 , 
 
     'HTML 2'                       =>   5.00,
     'HTML 3'                       =>   5.33,
