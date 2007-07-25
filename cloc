@@ -27,7 +27,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 # 1}}}
-my $VERSION = 0.80;
+my $VERSION = 0.90;
 require 5.006;
 # use modules                                  {{{1
 use warnings;
@@ -137,6 +137,10 @@ Usage: $script [options] <file(s)/dir(s)> | <report files>
    --found=<file>            Save names of every file found to <file>.
    --ignored=<file>          Save names of ignored files and the reason they
                              were ignored to <file>.
+   --no3                     Suppress third-generation language output.
+                             This option can cause report summation to fail
+                             if some reports were produced with this option
+                             while others were produced without it.
    --print_filter_stages     Print to STDOUT processed source code before and 
                              after each filter is applied.
    --progress_rate=<n>       Show progress update after every <n> files are
@@ -158,7 +162,7 @@ Usage: $script [options] <file(s)/dir(s)> | <report files>
                              .<ext> appended to it.
    --sum_reports             Input arguments are report files previously
                              created with the --report_file option.  Makes
-                             a cummulative set of results containing the
+                             a cumulative set of results containing the
                              sum of data from the individual report files.
    --write_lang_def=<file>   Writes to <file. the language processing filters
                              then exits.  Useful as a first step to creating
@@ -176,7 +180,7 @@ my ($opt_found, $opt_categorized, $opt_ignored,
     $opt_exclude_lang, $opt_exclude_dir, 
     $opt_read_lang_def, $opt_write_lang_def,
     $opt_strip_comments, $opt_quiet, $opt_report_file, $opt_sum_reports,
-    $opt_extract_with, $opt_by_file, $opt_xml,
+    $opt_no3, $opt_extract_with, $opt_by_file, $opt_xml,
     @opt_force_lang,
    );
 GetOptions(
@@ -197,6 +201,7 @@ GetOptions(
            "report_file=s"       => \$opt_report_file         ,
            "strip_comments=s"    => \$opt_strip_comments      ,
            "sum_reports"         => \$opt_sum_reports         ,
+           "no3"                 => \$opt_no3                 ,
            "v:i"                 => \$opt_v                   ,
            "version"             => \$opt_version             ,
            "write_lang_def=s"    => \$opt_write_lang_def      ,
@@ -503,10 +508,12 @@ sub combine_results {                        # {{{1
                    (\d+)\s+         # blank
                    (\d+)\s+         # comments
                    (\d+)\s+         # code
+                   (                #    next four entries missing with -nno3
                    x\s+             # x
                    \d+\.\d+\s+      # scale
                    =\s+             # =
                    (\d+\.\d+)\s*    # scaled code
+                   )?
                    $}x) {
                 if ($report_type eq "by language") {
                     next unless defined %{$rhaa_Filters_by_Language->{$1}};
@@ -517,13 +524,13 @@ sub combine_results {                        # {{{1
                     $rhh_count->{$1   }{'blank'  } += $3;
                     $rhh_count->{$1   }{'comment'} += $4;
                     $rhh_count->{$1   }{'code'   } += $5;
-                    $rhh_count->{$1   }{'scaled' } += $6;
+                    $rhh_count->{$1   }{'scaled' } += $7 unless $opt_no3;
                 } else {
                     $rhh_count->{$file}{'nFiles' } += $2;
                     $rhh_count->{$file}{'blank'  } += $3;
                     $rhh_count->{$file}{'comment'} += $4;
                     $rhh_count->{$file}{'code'   } += $5;
-                    $rhh_count->{$file}{'scaled' } += $6;
+                    $rhh_count->{$file}{'scaled' } += $7 unless $opt_no3;
                 }
             }
         }
@@ -556,7 +563,7 @@ sub generate_report {                        # {{{1
     $elapsed_sec = 0.5 unless $elapsed_sec;
 
     my $URL        = "http://cloc.sourceforge.net";
-    my $hypen_line = sprintf "%s", '-' x 79;
+    my $hyphen_line = sprintf "%s", '-' x 79;
     my $data_line  = "";
     my $first_column;
     my $BY_LANGUAGE = 0;
@@ -579,22 +586,32 @@ sub generate_report {                        # {{{1
 
     push @results, $header_line;
 
-    push @results, $hypen_line;
+    push @results, $hyphen_line;
 
-    $data_line  = sprintf "%-13s ", $first_column;
-    if ($BY_FILE) {
-        $data_line .= sprintf "%9s "  , " "    ;
-    } else {
-        $data_line .= sprintf "%9s "  , "files";
+    my $spacing_1 = 13;
+    my $spacing_2 =  9;
+    my $spacing_3 = 17;
+    if ($opt_no3) {
+        $spacing_1 = 19;
+        $spacing_2 = 14;
+        $spacing_3 = 28;
     }
-    $data_line .= sprintf "%9s %9s %9s %8s   %14s",
+    $data_line  = sprintf "%-${spacing_1}s ", $first_column;
+    if ($BY_FILE) {
+        $data_line .= sprintf "%${spacing_2}s "  , " "    ;
+    } else {
+        $data_line .= sprintf "%${spacing_2}s "  , "files";
+    }
+    $data_line .= sprintf "%${spacing_2}s %${spacing_2}s %${spacing_2}s",
         "blank"         ,
         "comment"       ,
-        "code"          ,
+        "code";
+    $data_line .= sprintf " %8s   %14s",
         "scale"         ,
-        "3rd gen. equiv";
+        "3rd gen. equiv"
+          unless $opt_no3;
     push @results, $data_line;
-    push @results, $hypen_line;
+    push @results, $hyphen_line;
 
     my $sum_scaled = 0;
     foreach my $lang_or_file (sort {
@@ -616,42 +633,57 @@ sub generate_report {                        # {{{1
             }
             $scaled = $factor*$rhh_count->{$lang_or_file}{'code'};
         } else {
-            $scaled =         $rhh_count->{$lang_or_file}{'scaled'};
-            $factor = $scaled/$rhh_count->{$lang_or_file}{'code'};
+            if (!defined $rhh_count->{$lang_or_file}{'scaled'}) {
+                $opt_no3 = 1;
+                # If we're summing together files previously generated
+                # with --no3 then rhh_count->{$lang_or_file}{'scaled'}
+                # this variable will be undefined.  That should only
+                # happen when summing together by file however.
+            } elsif ($BY_LANGUAGE) {
+                warn "Missing scaled language info for $lang_or_file\n";
+            }
+            unless ($opt_no3) {
+                $scaled =         $rhh_count->{$lang_or_file}{'scaled'};
+                $factor = $scaled/$rhh_count->{$lang_or_file}{'code'};
+            }
         }
         if ($BY_FILE) {
             $data_line  = sprintf "%-23s ", $lang_or_file;
         } else {
-            $data_line  = sprintf "%-17s ", $lang_or_file;
+            $data_line  = sprintf "%-${spacing_3}s ", $lang_or_file;
         }
         $data_line .= sprintf "%5d ", $rhh_count->{$lang_or_file}{'nFiles'}
             unless $BY_FILE;
-        $data_line .= sprintf "%9d %9d %9d x %6.2f = %14.2f",
+        $data_line .= sprintf "%${spacing_2}d %${spacing_2}d %${spacing_2}d",
             $rhh_count->{$lang_or_file}{'blank'}  ,
             $rhh_count->{$lang_or_file}{'comment'},
-            $rhh_count->{$lang_or_file}{'code'}   ,
+            $rhh_count->{$lang_or_file}{'code'};
+        $data_line .= sprintf " x %6.2f = %14.2f",
             $factor                           ,
-            $scaled                           ;
-        $sum_scaled  += $scaled;
+            $scaled
+              unless $opt_no3;
+        $sum_scaled  += $scaled unless $opt_no3;
         push @results, $data_line;
     }
     my $avg_scale = 1;  # weighted average of scale factors
-       $avg_scale = $sum_scaled / $sum_code if $sum_code;
-    push @results, $hypen_line;
+       $avg_scale = $sum_scaled / $sum_code if $sum_code and !$opt_no3;
+    push @results, $hyphen_line;
     if ($BY_FILE) {
         $data_line  = sprintf "%-23s ", "SUM:"  ;
     } else {
-        $data_line  = sprintf "%-13s ", "SUM:"  ;
-        $data_line .= sprintf "%9d ", $sum_files;
+        $data_line  = sprintf "%-${spacing_1}s ", "SUM:"  ;
+        $data_line .= sprintf "%${spacing_2}d ", $sum_files;
     }
-    $data_line .= sprintf "%9d %9d %9d x %6.2f = %14.2f",
+    $data_line .= sprintf "%${spacing_2}d %${spacing_2}d %${spacing_2}d",
         $sum_blank   ,
         $sum_comment ,
-        $sum_code    ,
+        $sum_code;
+    $data_line .= sprintf " x %6.2f = %14.2f",
         $avg_scale   ,
-        $sum_scaled  ;
+        $sum_scaled
+          unless $opt_no3;
     push @results, $data_line;
-    push @results, $hypen_line;
+    push @results, $hyphen_line;
 
     return @results;
 } # 1}}}
@@ -737,12 +769,14 @@ sub generate_report_xml {                    # {{{1
         }
         $data_line .= sprintf "files_count=\"%d\" ", $rhh_count->{$lang_or_file}{'nFiles'}
             unless $BY_FILE;
-        $data_line .= sprintf "blank=\"%d\" comment=\"%d\" code=\"%d\" factor=\"%.2f\" scaled=\"%.2f\" ",
+        $data_line .= sprintf "blank=\"%d\" comment=\"%d\" code=\"%d\" ",
             $rhh_count->{$lang_or_file}{'blank'}  ,
             $rhh_count->{$lang_or_file}{'comment'},
-            $rhh_count->{$lang_or_file}{'code'}   ,
+            $rhh_count->{$lang_or_file}{'code'}   ;
+        $data_line .= sprintf "factor=\"%.2f\" scaled=\"%.2f\" ",
             $factor                           ,
-            $scaled                           ;
+            $scaled
+              unless $opt_no3;
         $sum_scaled  += $scaled;
         
         if ($rhh_count->{$lang_or_file}{'lang'}) {
@@ -766,12 +800,14 @@ sub generate_report_xml {                    # {{{1
     if (!$BY_FILE) {
         $data_line .= sprintf "sum_files=\"%d\" ", $sum_files;
     }
-    $data_line .= sprintf "blank=\"%d\" comment=\"%d\" code=\"%d\" factor=\"%.2f\" scaled=\"%.2f\" ",
+    $data_line .= sprintf "blank=\"%d\" comment=\"%d\" code=\"%d\" ",
         $sum_blank   ,
         $sum_comment ,
-        $sum_code    ,
+        $sum_code    ;
+    $data_line .= sprintf "factor=\"%.2f\" scaled=\"%.2f\" ",
         $avg_scale   ,
-        $sum_scaled  ;
+        $sum_scaled  
+          unless $opt_no3;
     push @results, "<total " . $data_line . "/>";
     push @results, "<languages>";
     
@@ -1050,7 +1086,7 @@ sub remove_duplicate_files {                 # {{{1
     $n = 0;
     foreach my $bytes (sort {$a <=> $b} keys %files_by_size) {
         ++$n;
-        printf "Unique: %8d files                              \r", 
+        printf "Unique: %8d files                               \r", 
             $n unless $n % $opt_progress_rate;
         $rh_unique_source_file->{$files_by_size{$bytes}[0]} = 1;
         next unless scalar @{$files_by_size{$bytes}} > 1;
@@ -1839,7 +1875,9 @@ sub set_constants {                          # {{{1
                             ],
     'awk'                => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'bc'                 => [   [ 'remove_matches'      , '^\s*#'  ], ], 
-    'C'                  => [   [ 'call_regexp_common'  , 'C'      ], ], 
+    'C'                  => [   
+                                [ 'remove_matches'      , '^\s*//' ], # C99
+                                [ 'call_regexp_common'  , 'C'      ], ], 
     'C++'                => [   
                                 [ 'remove_matches'      , '^\s*//' ], 
                                 [ 'call_regexp_common'  , 'C'      ],
