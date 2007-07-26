@@ -164,7 +164,7 @@ Usage: $script [options] <file(s)/dir(s)> | <report files>
                              created with the --report_file option.  Makes
                              a cumulative set of results containing the
                              sum of data from the individual report files.
-   --write_lang_def=<file>   Writes to <file. the language processing filters
+   --write_lang_def=<file>   Writes to <file> the language processing filters
                              then exits.  Useful as a first step to creating
                              custom language definitions (see --read_lang_def).
    --xml                     Write the results in XML.
