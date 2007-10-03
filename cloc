@@ -27,7 +27,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 # 1}}}
-my $VERSION = 0.90;
+my $VERSION = 1.00;
 require 5.006;
 # use modules                                  {{{1
 use warnings;
@@ -89,6 +89,7 @@ BEGIN {
 #perl2exe_include "Regexp/Common/balanced.pm"
 #perl2exe_include "Regexp/Common/lingua.pm"
 #perl2exe_include "Regexp/Common/list.pm"
+#perl2exe_include "File/Glob.pm"
 
 use Text::Tabs qw { expand };
 #use Data::Dumper::Simple;
@@ -228,6 +229,7 @@ die $usage unless defined $opt_version         or
 #
 my $ON_WINDOWS = 0;
    $ON_WINDOWS = 1 if ($^O =~ /^MSWin/) or ($^O eq "Windows_NT");
+   $ON_WINDOWS = 0 if $ENV{'SHELL'};  # make Cygwin look like Unix
 
 my $nFiles_Found = 0;  # updated in make_file_list
 my (%Language_by_Extension, %Language_by_Script,
@@ -282,6 +284,16 @@ if ($opt_version) {
 print_extension_info($opt_show_ext ) if defined $opt_show_ext ;
 print_language_info( $opt_show_lang) if defined $opt_show_lang;
 exit if (defined $opt_show_ext) or (defined $opt_show_lang);
+
+# Windows doesn't expand wildcards.  Use code from Sean M. Burke's 
+# Win32::Autoglob module to do this.
+#print "Before glob have [", join(",", @ARGV), "]\n";
+@ARGV = map {;
+    ( defined($_) and m/[\*\?]/ ) ? sort(glob($_)) : $_
+      } @ARGV if $ON_WINDOWS; 
+;
+#print "after  glob have [", join(",", @ARGV), "]\n";
+
 if ($opt_sum_reports) {
     my %Results = ();
     foreach my $type( "by language", "by report file" ) {
