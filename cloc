@@ -278,7 +278,7 @@ foreach my $pair (@opt_force_lang) {
 # Step 2:  Early exits for display, summation. {{{1
 #
 if ($opt_version) {
-    print "$VERSION\n";
+    printf "%.2f\n", $VERSION;
     exit;
 }
 print_extension_info($opt_show_ext ) if defined $opt_show_ext ;
@@ -1749,6 +1749,7 @@ sub set_constants {                          # {{{1
             'cxx'         => 'C++'                   ,
             'da'          => 'DAL'                   ,
             'def'         => 'Teamcenter def'        ,
+            'dmap'        => 'DMAP'                  ,
             'dpr'         => 'Pascal'                ,
             'dtd'         => "DTD"                   ,
             'ec'          => 'C'                     ,
@@ -1801,6 +1802,7 @@ sub set_constants {                          # {{{1
             'csproj'      => 'MSBuild scripts' ,
             "mps"         => "MUMPS"                 ,
             'mth'         => 'Teamcenter mth'        ,
+            'oscript'     => 'LiveLink OScript'      ,
             'pad'         => 'Ada'                   , # Oracle Ada preprocessor
             'pas'         => 'Pascal'                ,
             'pcc'         => 'C++'                   , # Oracle C++ preprocessor
@@ -1830,6 +1832,7 @@ sub set_constants {                          # {{{1
             'sc'          => 'Lisp'                  ,
             'scm'         => 'Lisp'                  ,
             'sed'         => 'sed'                   ,
+            'ses'         => 'Patran Command Lang'   ,
             'sh'          => "Bourne Shell"          ,
             'sql'         => 'SQL'                   ,
             'tcl'         => 'Tcl/Tk'                ,
@@ -1905,6 +1908,7 @@ sub set_constants {                          # {{{1
     'ColdFusion'         => [   [ 'call_regexp_common'  , 'HTML'   ], ],
     'Crystal Reports'    => [   [ 'remove_matches'      , '^\s*//' ], ],
     'DAL'                => [   [ 'remove_between'      , '[]',    ], ],
+    'DMAP'               => [   [ 'remove_matches'      , '^\s*\$' ], ],
     'DOS Batch'          => [   [ 'remove_matches'      , '^\s*rem', ], ],
     'DTD'                => [   [ 'call_regexp_common'  , 'HTML'   ], ],
     'Expect'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
@@ -1929,6 +1933,7 @@ sub set_constants {                          # {{{1
                             ],
     'JCL'                => [   [ 'remove_jcl_comments' ,          ], ],
     'Lisp'               => [   [ 'remove_matches'      , '^\s*;'  ], ],
+    'LiveLink OScript'   => [   [ 'remove_matches'      , '^\s*//' ], ],
     'lua'                => [   [ 'call_regexp_common'  , 'lua'    ], ],
     'Make'               => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'MATLAB'             => [   [ 'remove_matches'      , '^\s*%'  ], ], 
@@ -1942,6 +1947,11 @@ sub set_constants {                          # {{{1
     'Oracle Forms'       => [   [ 'call_regexp_common'  , 'C'      ], ],
     'Oracle Reports'     => [   [ 'call_regexp_common'  , 'C'      ], ],
     'Pascal'             => [   [ 'call_regexp_common'  , 'Pascal' ], ],
+    'Patran Command Lang'=> [   
+                                [ 'remove_matches'      , '^\s*#'   ], 
+                                [ 'remove_matches'      , '^\s*\$#' ], 
+                                [ 'call_regexp_common'  , 'C'       ],
+                            ],
     'Perl'               => [   [ 'remove_below'        , '^__(END|DATA)__'],
                                 [ 'remove_matches'      , '^\s*#'  ], ], 
     'Python'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
@@ -2220,6 +2230,7 @@ sub set_constants {                          # {{{1
     'decrally'                     =>   2.00,
     'delphi'                       =>   2.76,
     'dl/1'                         =>   2.00,
+    'DMAP'                         =>   2.35,
     'dna4'                         =>   4.21,
     'DOS Batch'                    =>   0.63,
     'dsp assembly'                 =>   0.50,
@@ -2355,6 +2366,7 @@ sub set_constants {                          # {{{1
     'lilith'                       =>   1.13,
     'linc ii'                      =>   5.71,
     'Lisp'                         =>   1.25,
+    'LiveLink OScript'             =>   3.5 ,
     'loglisp'                      =>   1.38,
     'loops'                        =>   3.81,
     'lotus 123 dos'                =>  13.33,
@@ -2427,6 +2439,7 @@ sub set_constants {                          # {{{1
     'pace'                         =>   2.00,
     'paradox/pal'                  =>   2.22,
     'Pascal'                       =>   0.88,
+    'Patran Command Lang'          =>   2.50,
     'pc focus'                     =>   2.22,
     'pdl millenium'                =>   3.81,
     'pdp11 ade'                    =>   1.51,
