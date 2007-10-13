@@ -963,6 +963,7 @@ sub print_extension_info {                   # {{{1
 } # 1}}}
 sub print_language_info {                    # {{{1
     my ($language,) = @_;
+warn "top of print_language_info language=$language\n";
     my %extensions = (); # the subset matched by the given $language value
     if ($language) {  # show information on this language
         foreach my $ext (sort {lc $a cmp lc $b } keys %Language_by_Extension) {
@@ -978,10 +979,13 @@ sub print_language_info {                    # {{{1
     }
 
     # add exceptions (one file extension mapping to multiple languages)
-    push @{$extensions{'Objective C'}}, "m";
-    push @{$extensions{'MATLAB'}}     , "m";
-    push @{$extensions{'MUMPS'}}      , "m";
-    delete $extensions{'MATLAB/Objective C/MUMPS'};
+    if (!$language or 
+        $language =~ /^(Objective C|MATLAB|MUMPS)$/i) {
+        push @{$extensions{'Objective C'}}, "m";
+        push @{$extensions{'MATLAB'}}     , "m";
+        push @{$extensions{'MUMPS'}}      , "m";
+        delete $extensions{'MATLAB/Objective C/MUMPS'};
+    }
 
     if (%extensions) {
         foreach my $lang (sort {lc $a cmp lc $b } keys %extensions) {
@@ -1749,7 +1753,7 @@ sub set_constants {                          # {{{1
             'cxx'         => 'C++'                   ,
             'da'          => 'DAL'                   ,
             'def'         => 'Teamcenter def'        ,
-            'dmap'        => 'DMAP'                  ,
+            'dmap'        => 'NASTRAN DMAP'          ,
             'dpr'         => 'Pascal'                ,
             'dtd'         => "DTD"                   ,
             'ec'          => 'C'                     ,
@@ -1848,8 +1852,9 @@ sub set_constants {                          # {{{1
             "build"       => "NAnt scripts"          ,
             'xsd'         => "XSD"                   ,
             "xslt"        => "XSLT"                  ,
-            "xsl"         => "XSLT"                   ,
+            "xsl"         => "XSLT"                  ,
             'y'           => 'yacc'                  ,
+            'yaml'        => 'YAML'                  ,
             );
 # 1}}}
 %{$rh_Language_by_Script}    = (                 # {{{1
@@ -1908,7 +1913,7 @@ sub set_constants {                          # {{{1
     'ColdFusion'         => [   [ 'call_regexp_common'  , 'HTML'   ], ],
     'Crystal Reports'    => [   [ 'remove_matches'      , '^\s*//' ], ],
     'DAL'                => [   [ 'remove_between'      , '[]',    ], ],
-    'DMAP'               => [   [ 'remove_matches'      , '^\s*\$' ], ],
+    'NASTRAN DMAP'       => [   [ 'remove_matches'      , '^\s*\$' ], ],
     'DOS Batch'          => [   [ 'remove_matches'      , '^\s*rem', ], ],
     'DTD'                => [   [ 'call_regexp_common'  , 'HTML'   ], ],
     'Expect'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
@@ -1977,8 +1982,9 @@ sub set_constants {                          # {{{1
     'Visual Basic'       => [   [ 'remove_above'        , '^\s*Attribute\s+VB_Name\s+=' ],               
                                 [ 'remove_matches'      , '^\s*Attribute\s+'],
                                 [ 'remove_matches'      , '^\s*\47'], ],  # \47 = '
-    'yacc'               => [   [ 'call_regexp_common'  , 'C'      ], ], 
-    'lex'                => [   [ 'call_regexp_common'  , 'C'      ], ], 
+    'yacc'               => [   [ 'call_regexp_common'  , 'C'      ], ],
+    'YAML'               => [   [ 'remove_matches'      , '^\s*#'  ], ],
+    'lex'                => [   [ 'call_regexp_common'  , 'C'      ], ],
     'XML'                => [   [ 'call_regexp_common'  , 'HTML'   ], ],
     'XSD'                => [   [ 'call_regexp_common'  , 'HTML'   ], ],
     'XSLT'               => [   [ 'call_regexp_common'  , 'HTML'   ], ],
@@ -2230,7 +2236,7 @@ sub set_constants {                          # {{{1
     'decrally'                     =>   2.00,
     'delphi'                       =>   2.76,
     'dl/1'                         =>   2.00,
-    'DMAP'                         =>   2.35,
+    'NASTRAN DMAP'                 =>   2.35,
     'dna4'                         =>   4.21,
     'DOS Batch'                    =>   0.63,
     'dsp assembly'                 =>   0.50,
@@ -2625,6 +2631,7 @@ sub set_constants {                          # {{{1
     'xlisp'                        =>   1.25,
     'yacc'                         =>   1.51,
     'yacc++'                       =>   1.51,
+    'YAML'                         =>   0.90,
     'zbasic'                       =>   0.88,
     'zim'                          =>   4.21,
     'zlisp'                        =>   1.25,
