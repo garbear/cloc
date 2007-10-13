@@ -963,7 +963,6 @@ sub print_extension_info {                   # {{{1
 } # 1}}}
 sub print_language_info {                    # {{{1
     my ($language,) = @_;
-warn "top of print_language_info language=$language\n";
     my %extensions = (); # the subset matched by the given $language value
     if ($language) {  # show information on this language
         foreach my $ext (sort {lc $a cmp lc $b } keys %Language_by_Extension) {
