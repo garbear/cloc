@@ -708,22 +708,25 @@ sub generate_report {                        # {{{1
     }
     my $avg_scale = 1;  # weighted average of scale factors
        $avg_scale = $sum_scaled / $sum_code if $sum_code and !$opt_no3;
-    push @results, $hyphen_line;
-    if ($BY_FILE) {
-        $data_line  = sprintf "%-23s ", "SUM:"  ;
-    } else {
-        $data_line  = sprintf "%-${spacing_1}s ", "SUM:"  ;
-        $data_line .= sprintf "%${spacing_2}d ", $sum_files;
+    if ($sum_files > 1) {
+        # only print a summation line if there are multiple files
+        push @results, $hyphen_line;
+        if ($BY_FILE) {
+            $data_line  = sprintf "%-23s ", "SUM:"  ;
+        } else {
+            $data_line  = sprintf "%-${spacing_1}s ", "SUM:"  ;
+            $data_line .= sprintf "%${spacing_2}d ", $sum_files;
+        }
+        $data_line .= sprintf "%${spacing_2}d %${spacing_2}d %${spacing_2}d",
+            $sum_blank   ,
+            $sum_comment ,
+            $sum_code    ;
+        $data_line .= sprintf " x %6.2f = %14.2f",
+            $avg_scale   ,
+            $sum_scaled
+              unless $opt_no3;
+        push @results, $data_line;
     }
-    $data_line .= sprintf "%${spacing_2}d %${spacing_2}d %${spacing_2}d",
-        $sum_blank   ,
-        $sum_comment ,
-        $sum_code;
-    $data_line .= sprintf " x %6.2f = %14.2f",
-        $avg_scale   ,
-        $sum_scaled
-          unless $opt_no3;
-    push @results, $data_line;
     push @results, $hyphen_line;
 
     return @results;
