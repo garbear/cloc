@@ -105,35 +105,35 @@ Usage: $script [options] <file(s)/dir(s)> | <report files>
  recursively below the given directories.
 
  Options:
-   --by_file                 Report results for every source file encountered
+   --by-file                 Report results for every source file encountered
                              in addition to reporting by language.
    --categorized=<file>      Save names of categorized files to <file>.
    --counted=<file>          Save names of processed source files to <file>.
-   --exclude_dir=<D1>[,D2,]  Exclude the given comma separated directories
+   --exclude-dir=<D1>[,D2,]  Exclude the given comma separated directories
                              D1, D2, D3, et cetera, from being scanned.  For
-                             example  --exclude_dir=.cvs,.svn  will skip
+                             example  --exclude-dir=.cvs,.svn  will skip
                              all files that have /.csv/ or /.svn/ as part of 
                              their path.
-   --exclude_lang=<L1>[,L2,] Exclude the given comma separated languages
+   --exclude-lang=<L1>[,L2,] Exclude the given comma separated languages
                              L1, L2, L3, et cetera, from being counted.
-   --extract_with=<cmd>      Use <cmd> to extract binary archive files (e.g.:
+   --extract-with=<cmd>      Use <cmd> to extract binary archive files (e.g.:
                              .tar.gz, .zip, .Z).  Use the literal '>FILE<' as 
                              a stand-in for the actual file(s) to be
                              extracted.  For example, to count lines of code
                              in the input files 
                                 gcc-4.2.tar.gz  perl-5.8.8.tar.gz  
                              on Unix use  
-                               --extract_with='gzip -dc >FILE< | tar xfv -'
+                               --extract-with='gzip -dc >FILE< | tar xfv -'
                              and on Windows use: 
-                               --extract_with=\"\\\"c:\\Program Files\\WinZip\\WinZip32.exe\\\" -e -o >FILE< .\"
+                               --extract-with=\"\\\"c:\\Program Files\\WinZip\\WinZip32.exe\\\" -e -o >FILE< .\"
                              (if you have WinZip installed there).
-   --force_lang=<lang>,<ext> Process all files that have a <ext> extension 
+   --force-lang=<lang>,<ext> Process all files that have a <ext> extension 
                              with the counter for language <lang>.  For 
                              example, to count all .f files with the 
                              Fortran 90 counter (which expects files to 
                              end with .f90) instead of the default Fortran 77 
                              counter, use
-                               --force_lang=\"Fortran 90\",f
+                               --force-lang=\"Fortran 90\",f
                              This option can be specified multiple times.
    --found=<file>            Save names of every file found to <file>.
    --ignored=<file>          Save names of ignored files and the reason they
@@ -142,32 +142,32 @@ Usage: $script [options] <file(s)/dir(s)> | <report files>
                              This option can cause report summation to fail
                              if some reports were produced with this option
                              while others were produced without it.
-   --print_filter_stages     Print to STDOUT processed source code before and 
+   --print-filter-stages     Print to STDOUT processed source code before and 
                              after each filter is applied.
-   --progress_rate=<n>       Show progress update after every <n> files are
+   --progress-rate=<n>       Show progress update after every <n> files are
                              processed (default <n>=100).
    --quiet                   Suppress all information messages except for
                              the final report.
-   --report_file=<file>      Write the results to <file> instead of STDOUT.
-   --read_lang_def=<file>    Load from <file> the language processing filters.
-                             (see also --write_lang_def) then use these filters
+   --report-file=<file>      Write the results to <file> instead of STDOUT.
+   --read-lang-def=<file>    Load from <file> the language processing filters.
+                             (see also --write-lang-def) then use these filters
                              instead of the built-in filters.
-   --show_ext[=<ext>]        Print information about all known (or just the
+   --show-ext[=<ext>]        Print information about all known (or just the
                              given) file extensions and exit.
-   --show_lang[=<lang>]      Print information about all known (or just the
+   --show-lang[=<lang>]      Print information about all known (or just the
                              given) languages and exit.
-   --strip_comments=<ext>    For each file processed, write to the current
+   --strip-comments=<ext>    For each file processed, write to the current
                              directory a version of the file which has blank
                              lines and comments removed.  The name of each
                              stripped file is the original file name with 
                              .<ext> appended to it.
-   --sum_reports             Input arguments are report files previously
-                             created with the --report_file option.  Makes
+   --sum-reports             Input arguments are report files previously
+                             created with the --report-file option.  Makes
                              a cumulative set of results containing the
                              sum of data from the individual report files.
-   --write_lang_def=<file>   Writes to <file> the language processing filters
+   --write-lang-def=<file>   Writes to <file> the language processing filters
                              then exits.  Useful as a first step to creating
-                             custom language definitions (see --read_lang_def).
+                             custom language definitions (see --read-lang-def).
    --xml                     Write the results in XML.
    -v[=<n>]                  Verbose switch (optional numeric value).
    --version                 Print the version of this program and exit.
@@ -175,39 +175,68 @@ Usage: $script [options] <file(s)/dir(s)> | <report files>
 ";
 $| = 1;  # flush STDOUT
 my $start_time = time();
-my ($opt_found, $opt_categorized, $opt_ignored, 
-    $opt_counted, $opt_show_ext, $opt_show_lang, $opt_progress_rate, 
-    $opt_print_filter_stages, $opt_v, $opt_version,
-    $opt_exclude_lang, $opt_exclude_dir, 
-    $opt_read_lang_def, $opt_write_lang_def,
-    $opt_strip_comments, $opt_quiet, $opt_report_file, $opt_sum_reports,
-    $opt_no3, $opt_extract_with, $opt_by_file, $opt_xml,
-    @opt_force_lang,
+my ($opt_found                ,
+    $opt_categorized          ,
+    $opt_ignored              ,
+    $opt_counted              ,
+    $opt_show_ext             ,
+    $opt_show_lang            ,
+    $opt_progress_rate        ,
+    $opt_print_filter_stages  ,
+    $opt_v                    ,
+    $opt_version              ,
+    $opt_exclude_lang         ,
+    $opt_exclude_dir          ,
+    $opt_read_lang_def        ,
+    $opt_write_lang_def       ,
+    $opt_strip_comments       ,
+    $opt_quiet                ,
+    $opt_report_file          ,
+    $opt_sum_reports          ,
+    $opt_no3                  ,
+    $opt_extract_with         ,
+    $opt_by_file              ,
+    $opt_xml                  ,
+    @opt_force_lang           ,
    );
 GetOptions(
            "by_file"             => \$opt_by_file             ,
+           "by-file"             => \$opt_by_file             ,
            "categorized=s"       => \$opt_categorized         ,
            "counted=s"           => \$opt_counted             ,
            "exclude_lang=s"      => \$opt_exclude_lang        ,
+           "exclude-lang=s"      => \$opt_exclude_lang        ,
            "exclude_dir=s"       => \$opt_exclude_dir         ,
+           "exclude-dir=s"       => \$opt_exclude_dir         ,
            "extract_with=s"      => \$opt_extract_with        , 
+           "extract-with=s"      => \$opt_extract_with        , 
            "found=s"             => \$opt_found               ,
            "ignored=s"           => \$opt_ignored             ,
            "quiet"               => \$opt_quiet               ,
            "read_lang_def=s"     => \$opt_read_lang_def       ,
+           "read-lang-def=s"     => \$opt_read_lang_def       ,
            "show_ext:s"          => \$opt_show_ext            ,
+           "show-ext:s"          => \$opt_show_ext            ,
            "show_lang:s"         => \$opt_show_lang           ,
+           "show-lang:s"         => \$opt_show_lang           ,
            "progress_rate=i"     => \$opt_progress_rate       ,
+           "progress-rate=i"     => \$opt_progress_rate       ,
            "print_filter_stages" => \$opt_print_filter_stages ,
+           "print-filter-stages" => \$opt_print_filter_stages ,
            "report_file=s"       => \$opt_report_file         ,
+           "report-file=s"       => \$opt_report_file         ,
            "strip_comments=s"    => \$opt_strip_comments      ,
+           "strip-comments=s"    => \$opt_strip_comments      ,
            "sum_reports"         => \$opt_sum_reports         ,
+           "sum-reports"         => \$opt_sum_reports         ,
            "no3"                 => \$opt_no3                 ,
            "v:i"                 => \$opt_v                   ,
            "version"             => \$opt_version             ,
            "write_lang_def=s"    => \$opt_write_lang_def      ,
+           "write-lang-def=s"    => \$opt_write_lang_def      ,
            "xml"                 => \$opt_xml                 ,
            "force_lang=s"        => \@opt_force_lang          ,
+           "force-lang=s"        => \@opt_force_lang          ,
           );
 
 my %Exclude_Language = ();
@@ -988,7 +1017,7 @@ sub print_language_info {                    # {{{1
 
     if (%extensions) {
         foreach my $lang (sort {lc $a cmp lc $b } keys %extensions) {
-            printf "%-24s (%s)\n", $lang, join(", ", @{$extensions{$lang}});
+            printf "%-26s (%s)\n", $lang, join(", ", @{$extensions{$lang}});
         }
     }
 } # 1}}}
@@ -1729,7 +1758,7 @@ sub set_constants {                          # {{{1
             'master'      => 'ASP.Net'               ,
             'sitemap'     => 'ASP.Net'               ,
             'awk'         => 'awk'                   ,
-            'bash'        => "Bourne Shell"          ,
+            'bash'        => "Bourne Again Shell"    ,
             'bas'         => "Visual Basic"          ,
             'bat'         => 'DOS Batch'             ,
             'BAT'         => 'DOS Batch'             ,
@@ -1815,7 +1844,6 @@ sub set_constants {                          # {{{1
             'php3'        => 'PHP'                   ,
             'php4'        => 'PHP'                   ,
             'php5'        => 'PHP'                   ,
-            'php6'        => 'PHP'                   ,
             'php'         => 'PHP'                   ,
             'plh'         => 'Perl'                  ,
             'pl'          => 'Perl'                  ,
@@ -1832,10 +1860,12 @@ sub set_constants {                          # {{{1
             'rexx'        => "Rexx"                  ,
             's'           => 'Assembler'             ,
             'S'           => 'Assembler'             ,
+            'sbl'         => 'Softbridge Basic'      ,
+            'SBL'         => 'Softbridge Basic'      ,
             'sc'          => 'Lisp'                  ,
             'scm'         => 'Lisp'                  ,
             'sed'         => 'sed'                   ,
-            'ses'         => 'Patran Command Lang'   ,
+            'ses'         => 'Patran Command Language'   ,
             'sh'          => "Bourne Shell"          ,
             'sql'         => 'SQL'                   ,
             'tcl'         => 'Tcl/Tk'                ,
@@ -1849,6 +1879,7 @@ sub set_constants {                          # {{{1
             'webinfo'     => 'ASP.Net'               ,
             "xml"         => "XML"                   ,
             "build"       => "NAnt scripts"          ,
+            'vim'         => 'vim script'            ,
             'xsd'         => "XSD"                   ,
             "xslt"        => "XSLT"                  ,
             "xsl"         => "XSLT"                  ,
@@ -1858,7 +1889,7 @@ sub set_constants {                          # {{{1
 # 1}}}
 %{$rh_Language_by_Script}    = (                 # {{{1
             'awk'      => 'awk'                   ,
-            'bash'     => 'Bourne Shell'          ,# Bourne Again Shell too long
+            'bash'     => 'Bourne Again Shell'    ,
             'bc'       => 'bc'                    ,# calculator
             'csh'      => 'C Shell'               ,
             'idl'      => 'IDL'                   ,
@@ -1867,6 +1898,7 @@ sub set_constants {                          # {{{1
             'octave'   => 'Octave'                ,
             'perl5'    => 'Perl'                  ,
             'perl'     => 'Perl'                  ,
+            'ruby'     => 'Ruby'                  ,
             'sed'      => 'sed'                   ,
             'sh'       => 'Bourne Shell'          ,
             'tcl'      => 'Tcl/Tk'                ,
@@ -1951,7 +1983,7 @@ sub set_constants {                          # {{{1
     'Oracle Forms'       => [   [ 'call_regexp_common'  , 'C'      ], ],
     'Oracle Reports'     => [   [ 'call_regexp_common'  , 'C'      ], ],
     'Pascal'             => [   [ 'call_regexp_common'  , 'Pascal' ], ],
-    'Patran Command Lang'=> [   
+    'Patran Command Language'=> [   
                                 [ 'remove_matches'      , '^\s*#'   ], 
                                 [ 'remove_matches'      , '^\s*\$#' ], 
                                 [ 'call_regexp_common'  , 'C'       ],
@@ -1971,6 +2003,7 @@ sub set_constants {                          # {{{1
                                 [ 'call_regexp_common'  , 'C'      ], 
                             ],
     'sed'                => [   [ 'remove_matches'      , '^\s*#'  ], ], 
+    'Bourne Again Shell' => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'Bourne Shell'       => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'C Shell'            => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'Korn Shell'         => [   [ 'remove_matches'      , '^\s*#'  ], ], 
@@ -1978,6 +2011,10 @@ sub set_constants {                          # {{{1
     'Teamcenter def'     => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'Teamcenter met'     => [   [ 'call_regexp_common'  , 'C'      ], ],
     'Teamcenter mth'     => [   [ 'remove_matches'      , '^\s*#'  ], ], 
+    'Softbridge Basic'   => [   [ 'remove_above'        , '^\s*Attribute\s+VB_Name\s+=' ],               
+                                [ 'remove_matches'      , '^\s*Attribute\s+'],
+                                [ 'remove_matches'      , '^\s*\47'], ],  # \47 = '
+    'vim script'         => [   [ 'remove_matches'      , '^\s*"'  ], ],
     'Visual Basic'       => [   [ 'remove_above'        , '^\s*Attribute\s+VB_Name\s+=' ],               
                                 [ 'remove_matches'      , '^\s*Attribute\s+'],
                                 [ 'remove_matches'      , '^\s*\47'], ],  # \47 = '
@@ -2444,7 +2481,7 @@ sub set_constants {                          # {{{1
     'pace'                         =>   2.00,
     'paradox/pal'                  =>   2.22,
     'Pascal'                       =>   0.88,
-    'Patran Command Lang'          =>   2.50,
+    'Patran Command Language'      =>   2.50,
     'pc focus'                     =>   2.22,
     'pdl millenium'                =>   3.81,
     'pdp11 ade'                    =>   1.51,
@@ -2521,6 +2558,7 @@ sub set_constants {                          # {{{1
     'screen painter default'       =>  13.33,
     'sequal'                       =>   6.67,
     'Bourne Shell'                 =>   3.81,
+    'Bourne Again Shell'           =>   3.81,
     'ksh'                          =>   3.81,
     'C Shell'                      =>   3.81,
     'siebel tools '                =>   6.15,
@@ -2537,6 +2575,7 @@ sub set_constants {                          # {{{1
     'snap'                         =>   1.00,
     'snobol24'                     =>   0.63,
     'softscreen'                   =>   5.71,
+    'Softbridge Basic'             =>   2.76,
     'solo'                         =>   1.38,
     'speakeasy'                    =>   2.22,
     'spinnaker ppl'                =>   2.22,
@@ -2596,6 +2635,7 @@ sub set_constants {                          # {{{1
     'vbscript'                     =>   2.35,
     'vectran'                      =>   0.75,
     'vhdl '                        =>   4.21,
+    'vim script'                   =>   3.00,
     'visible c'                    =>   1.63,
     'visible cobol'                =>   2.00,
     'visicalc 1'                   =>   8.89,
@@ -2606,7 +2646,7 @@ sub set_constants {                          # {{{1
     'visual basic 3'               =>   2.00,
     'visual basic 4'               =>   2.22,
     'visual basic 5'               =>   2.76,
-'Visual Basic'               =>   2.76,
+    'Visual Basic'                 =>   2.76,
     'visual basic dos'             =>   2.00,
     'visual c++'                   =>   2.35,
     'visual cobol'                 =>   4.00,
