@@ -152,6 +152,10 @@ Usage: $script [options] <file(s)/dir(s)> | <report files>
    --read-lang-def=<file>    Load from <file> the language processing filters.
                              (see also --write-lang-def) then use these filters
                              instead of the built-in filters.
+   --sdir=<dir>              Use <dir> as the scratch directory instead of
+                             letting File::Temp chose the location.  Files
+                             written to this location are not removed at
+                             the end of the run (as they are with File::Temp).
    --show-ext[=<ext>]        Print information about all known (or just the
                              given) file extensions and exit.
    --show-lang[=<lang>]      Print information about all known (or just the
@@ -168,9 +172,10 @@ Usage: $script [options] <file(s)/dir(s)> | <report files>
    --write-lang-def=<file>   Writes to <file> the language processing filters
                              then exits.  Useful as a first step to creating
                              custom language definitions (see --read-lang-def).
-   --xml                     Write the results in XML.
    -v[=<n>]                  Verbose switch (optional numeric value).
    --version                 Print the version of this program and exit.
+   --xml                     Write the results in XML.
+   --yaml                    Write the results in YAML.
 
 ";
 $| = 1;  # flush STDOUT
@@ -192,6 +197,7 @@ my ($opt_found                ,
     $opt_strip_comments       ,
     $opt_quiet                ,
     $opt_report_file          ,
+    $opt_sdir                 ,
     $opt_sum_reports          ,
     $opt_no3                  ,
     $opt_extract_with         ,
@@ -225,6 +231,7 @@ GetOptions(
            "print-filter-stages" => \$opt_print_filter_stages ,
            "report_file=s"       => \$opt_report_file         ,
            "report-file=s"       => \$opt_report_file         ,
+           "sdir=s"              => \$opt_sdir                ,
            "strip_comments=s"    => \$opt_strip_comments      ,
            "strip-comments=s"    => \$opt_strip_comments      ,
            "sum_reports"         => \$opt_sum_reports         ,
@@ -440,7 +447,7 @@ my %Language           = ();
 my %unique_source_file = ();
 remove_duplicate_files($fh, \%Language   , \%unique_source_file, 
                             \%Error_Codes, \@Errors , \%Ignored);
-printf "%8d unique file%s.            \n", 
+printf "%8d unique file%s.                              \n", 
     plural_form(scalar keys %unique_source_file) 
     unless $opt_quiet;
 # 1}}}
@@ -497,28 +504,30 @@ printf "%8d file%s ignored.\n", plural_form(scalar keys %Ignored)
 print_errors(\%Error_Codes, \@Errors) if @Errors;
 exit unless %Results_by_Language;
 
+#use YAML; print YAML::Dump(\%Results_by_Language); die;
+
 my @results = ();
 unless ($opt_by_file) {
     if ($opt_xml) {
-        @results = generate_report_xml($VERSION, $end_time - $start_time,
-                            "by language",
-                            \%Results_by_Language, \%Scale_Factor);
+        @results = generate_report( $VERSION, $end_time - $start_time,
+                                   "by language",
+                                   \%Results_by_Language, \%Scale_Factor);
     } else {
-        @results = generate_report($VERSION, $end_time - $start_time,
-                              "by language",
-                             \%Results_by_Language, \%Scale_Factor);
+        @results = generate_report( $VERSION, $end_time - $start_time,
+                                    "by language",
+                                   \%Results_by_Language, \%Scale_Factor);
     }
     if ($opt_report_file) { write_file($opt_report_file, @results); } 
     else                  { print "\n", join("\n", @results), "\n"; }
 } else {
     if ($opt_xml) {
-        @results = generate_report_xml($VERSION, $end_time - $start_time,
-                            "by file",
-                            \%Results_by_File, \%Scale_Factor);
+        @results = generate_report( $VERSION, $end_time - $start_time,
+                                    "by file",
+                                    \%Results_by_File, \%Scale_Factor);
     } else {
-        @results = generate_report($VERSION, $end_time - $start_time,
-                              "by file",
-                             \%Results_by_File, \%Scale_Factor);
+        @results = generate_report( $VERSION, $end_time - $start_time,
+                                    "by file",
+                                   \%Results_by_File, \%Scale_Factor);
     }
     if ($opt_report_file) { write_file($opt_report_file, @results); } 
     else                  { print "\n", join("\n", @results), "\n"; }
@@ -589,6 +598,8 @@ sub generate_report {                        # {{{1
        ) = @_;
 
     my @results       = ();
+    
+    my $languages     = ();
 
     my $sum_files     = 0;
     my $sum_code      = 0;
@@ -602,6 +613,34 @@ sub generate_report {                        # {{{1
     }
     my $sum_lines = $sum_blank + $sum_comment + $sum_code;
     $elapsed_sec = 0.5 unless $elapsed_sec;
+
+    my $spacing_1 = 13;
+    my $spacing_2 =  9;
+    my $spacing_3 = 17;
+    if ($opt_no3) {
+        $spacing_1 = 19;
+        $spacing_2 = 14;
+        $spacing_3 = 28;
+    }
+    my %Format = (
+        '1' => { 'xml' => 'name="%s" ',
+                 'txt' => '%-23s '    ,
+               },
+        '2' => { 'xml' => 'name="%s" ',
+                 'txt' => "\%-${spacing_3}s ",
+               },
+        '3' => { 'xml' => 'files_count="%d" ',
+                 'txt' => '%5d ',
+               },
+        '4' => { 'xml' => 'blank="%d" comment="%d" code="%d" ',
+                 'txt' => "\%${spacing_2}d \%${spacing_2}d \%${spacing_2}d",
+               },
+        '5' => { 'xml' => 'factor="%.2f" scaled="%.2f" ',
+                 'txt' => ' x %6.2f = %14.2f',
+               },
+    );
+    my $Style = "txt";
+       $Style = "xml" if $opt_xml;
 
     my $URL        = "http://cloc.sourceforge.net";
     my $hyphen_line = sprintf "%s", '-' x 79;
@@ -621,38 +660,37 @@ sub generate_report {                        # {{{1
 
     my $header_line  = sprintf "%s v %4.2f", $URL, $version;
        $header_line .= sprintf("  T=%.1f s (%.1f files/s, %.1f lines/s)",
-        $elapsed_sec           ,
-        $sum_files/$elapsed_sec,
-        $sum_lines/$elapsed_sec) unless $opt_sum_reports;
-
-    push @results, $header_line;
-
-    push @results, $hyphen_line;
-
-    my $spacing_1 = 13;
-    my $spacing_2 =  9;
-    my $spacing_3 = 17;
-    if ($opt_no3) {
-        $spacing_1 = 19;
-        $spacing_2 = 14;
-        $spacing_3 = 28;
-    }
-    $data_line  = sprintf "%-${spacing_1}s ", $first_column;
-    if ($BY_FILE) {
-        $data_line .= sprintf "%${spacing_2}s "  , " "    ;
+                        $elapsed_sec           ,
+                        $sum_files/$elapsed_sec,
+                        $sum_lines/$elapsed_sec) unless $opt_sum_reports;
+    if ($opt_xml) {
+        push @results, "<?xml version=\"1.0\"?>";
+        push @results, "<results>";
+        push @results, "<header>$header_line</header>";
     } else {
-        $data_line .= sprintf "%${spacing_2}s "  , "files";
+        push @results, $header_line;
+        push @results, $hyphen_line;
     }
-    $data_line .= sprintf "%${spacing_2}s %${spacing_2}s %${spacing_2}s",
-        "blank"         ,
-        "comment"       ,
-        "code";
-    $data_line .= sprintf " %8s   %14s",
-        "scale"         ,
-        "3rd gen. equiv"
-          unless $opt_no3;
-    push @results, $data_line;
-    push @results, $hyphen_line;
+
+    if ($Style eq "txt") {
+        # column headers
+        $data_line  = sprintf "%-${spacing_1}s ", $first_column;
+        if ($BY_FILE) {
+            $data_line .= sprintf "%${spacing_2}s "  , " "    ;
+        } else {
+            $data_line .= sprintf "%${spacing_2}s "  , "files";
+        }
+        $data_line .= sprintf "%${spacing_2}s %${spacing_2}s %${spacing_2}s",
+            "blank"         ,
+            "comment"       ,
+            "code";
+        $data_line .= sprintf " %8s   %14s",
+            "scale"         ,
+            "3rd gen. equiv"
+              unless $opt_no3;
+        push @results, $data_line;
+        push @results, $hyphen_line;
+    }
 
     my $sum_scaled = 0;
     foreach my $lang_or_file (sort {
@@ -688,179 +726,83 @@ sub generate_report {                        # {{{1
                 $factor = $scaled/$rhh_count->{$lang_or_file}{'code'};
             }
         }
+
         if ($BY_FILE) {
-            $data_line  = sprintf "%-23s ", $lang_or_file;
+            $data_line  = sprintf $Format{'1'}{$Style}, $lang_or_file;
         } else {
-            $data_line  = sprintf "%-${spacing_3}s ", $lang_or_file;
+            $data_line  = sprintf $Format{'2'}{$Style}, $lang_or_file;
         }
-        $data_line .= sprintf "%5d ", $rhh_count->{$lang_or_file}{'nFiles'}
-            unless $BY_FILE;
-        $data_line .= sprintf "%${spacing_2}d %${spacing_2}d %${spacing_2}d",
+        $data_line .= sprintf $Format{3}{$Style}  , 
+                        $rhh_count->{$lang_or_file}{'nFiles'} unless $BY_FILE;
+        $data_line .= sprintf $Format{4}{$Style}  , 
             $rhh_count->{$lang_or_file}{'blank'}  ,
             $rhh_count->{$lang_or_file}{'comment'},
-            $rhh_count->{$lang_or_file}{'code'};
-        $data_line .= sprintf " x %6.2f = %14.2f",
-            $factor                           ,
-            $scaled
-              unless $opt_no3;
+            $rhh_count->{$lang_or_file}{'code'}   ;
+        $data_line .= sprintf $Format{5}{$Style}  ,
+            $factor                               ,
+            $scaled unless $opt_no3;
         $sum_scaled  += $scaled unless $opt_no3;
-        push @results, $data_line;
+
+        if ($opt_xml) {
+            if (defined $rhh_count->{$lang_or_file}{'lang'}) {
+                my $lang = $rhh_count->{$lang_or_file}{'lang'};
+                if (!defined $languages->{$lang}) {
+                    $languages->{$lang} = $lang;
+                }
+                $data_line.=' language="' . $lang . '" ';
+            }
+            if ($BY_FILE) {
+                push @results, "<file " . $data_line . "/>";
+            } else {
+                push @results, "<language " . $data_line . "/>";
+            }
+        } else {
+            push @results, $data_line;
+        }
     }
     my $avg_scale = 1;  # weighted average of scale factors
        $avg_scale = $sum_scaled / $sum_code if $sum_code and !$opt_no3;
-    if ($sum_files > 1) {
-        # only print a summation line if there are multiple files
-        push @results, $hyphen_line;
+
+    if ($opt_xml) {
+        $data_line = "";
+        if (!$BY_FILE) {
+            $data_line .= sprintf "sum_files=\"%d\" ", $sum_files;
+        }
+        $data_line .= sprintf $Format{'4'}{$Style},
+            $sum_blank   ,
+            $sum_comment ,
+            $sum_code    ;
+        $data_line .= sprintf $Format{'5'}{$Style},
+            $avg_scale   ,
+            $sum_scaled  unless $opt_no3;
+        push @results, "<total " . $data_line . "/>";
+        push @results, "<languages>";
+        
+        foreach my $language (keys %{$languages}) {
+            push @results, '<language name="' . $language . '"/>';
+        }
+        
+        push @results, "</languages>";
+        push @results, "</results>";
+    } else {
+ 
         if ($BY_FILE) {
             $data_line  = sprintf "%-23s ", "SUM:"  ;
         } else {
             $data_line  = sprintf "%-${spacing_1}s ", "SUM:"  ;
             $data_line .= sprintf "%${spacing_2}d ", $sum_files;
         }
-        $data_line .= sprintf "%${spacing_2}d %${spacing_2}d %${spacing_2}d",
+        $data_line .= sprintf $Format{'4'}{$Style},
             $sum_blank   ,
             $sum_comment ,
             $sum_code    ;
-        $data_line .= sprintf " x %6.2f = %14.2f",
+        $data_line .= sprintf $Format{'5'}{$Style},
             $avg_scale   ,
-            $sum_scaled
-              unless $opt_no3;
-        push @results, $data_line;
+            $sum_scaled unless $opt_no3;
+        push @results, $hyphen_line if $sum_files > 1;
+        push @results, $data_line   if $sum_files > 1;
+        push @results, $hyphen_line;
     }
-    push @results, $hyphen_line;
-
-    return @results;
-} # 1}}}
-sub generate_report_xml {                    # {{{1
-    # returns an array of lines containing the results
-    # This subroutine contributed by Anton Demichev.
-    my ($version    , # in
-        $elapsed_sec, # in
-        $report_type, # in  "by language" | "by report file" | "by file"
-        $rhh_count  , # in  count{TYPE}{nFiles|code|blank|comment|scaled}
-        $rh_scale   , # in
-       ) = @_;
-
-    my @results       = ();
-    
-    my $languages     = ();
-
-    my $sum_files     = 0;
-    my $sum_code      = 0;
-    my $sum_blank     = 0;
-    my $sum_comment   = 0;
-    foreach my $language (keys %{$rhh_count}) {
-        $sum_files   += $rhh_count->{$language}{'nFiles'} ;
-        $sum_blank   += $rhh_count->{$language}{'blank'}  ;
-        $sum_comment += $rhh_count->{$language}{'comment'};
-        $sum_code    += $rhh_count->{$language}{'code'}   ;
-    }
-    my $sum_lines = $sum_blank + $sum_comment + $sum_code;
-    $elapsed_sec = 0.5 unless $elapsed_sec;
-
-    my $URL        = "http://cloc.sourceforge.net";
-    my $data_line  = "";
-    my $first_column;
-    my $BY_LANGUAGE = 0;
-    my $BY_FILE     = 0;
-    if      ($report_type eq "by language") {
-        $first_column = "Language";
-        $BY_LANGUAGE  = 1;
-    } elsif ($report_type eq "by file")     {
-        $first_column = "File";
-        $BY_FILE      = 1;
-    } else {
-        $first_column = "Report File";
-    }
-
-    my $header_line  = sprintf "%s v %4.2f", $URL, $version;
-       $header_line .= sprintf("  T=%.1f s (%.1f files/s, %.1f lines/s)",
-                        $elapsed_sec           ,
-                        $sum_files/$elapsed_sec,
-                        $sum_lines/$elapsed_sec) unless $opt_sum_reports;
-    push @results, "<?xml version=\"1.0\"?>";
-    push @results, "<results>";
-    
-    push @results, "<header>$header_line</header>";
-
-    my $sum_scaled = 0;
-    foreach my $lang_or_file (sort {
-                                 $rhh_count->{$b}{'code'} <=>
-                                 $rhh_count->{$a}{'code'}
-                               }
-                          keys %{$rhh_count}) {
-        my ($factor, $scaled);
-        if ($BY_LANGUAGE or $BY_FILE) {
-            $factor = 1;
-            if ($BY_LANGUAGE) {
-                if (defined $rh_scale->{$lang_or_file}) {
-                    $factor = $rh_scale->{$lang_or_file};
-                } else {
-                    warn "No scale factor for $lang_or_file; using 1.00";
-                }
-            } else { # by individual code file
-                $factor = $rh_scale->{$rhh_count->{$lang_or_file}{'lang'}};
-            }
-            $scaled = $factor*$rhh_count->{$lang_or_file}{'code'};
-        } else {
-            $scaled =         $rhh_count->{$lang_or_file}{'scaled'};
-            $factor = $scaled/$rhh_count->{$lang_or_file}{'code'};
-        }
-        if ($BY_FILE) {
-            $data_line  = sprintf "name=\"%s\" ", $lang_or_file;
-        } else {
-            $data_line  = sprintf "name=\"%s\" ", $lang_or_file;
-        }
-        $data_line .= sprintf "files_count=\"%d\" ", $rhh_count->{$lang_or_file}{'nFiles'}
-            unless $BY_FILE;
-        $data_line .= sprintf "blank=\"%d\" comment=\"%d\" code=\"%d\" ",
-            $rhh_count->{$lang_or_file}{'blank'}  ,
-            $rhh_count->{$lang_or_file}{'comment'},
-            $rhh_count->{$lang_or_file}{'code'}   ;
-        $data_line .= sprintf "factor=\"%.2f\" scaled=\"%.2f\" ",
-            $factor                           ,
-            $scaled
-              unless $opt_no3;
-        $sum_scaled  += $scaled;
-        
-        if ($rhh_count->{$lang_or_file}{'lang'}) {
-            my $lang = $rhh_count->{$lang_or_file}{'lang'};
-            if (!defined $languages->{$lang}) {
-                $languages->{$lang} = $lang;
-            }
-            $data_line.=" language=\"" . $lang . "\" ";
-        }
-        
-        if ($BY_FILE) {
-            push @results, "<file " . $data_line . "/>";
-        } else {
-            push @results, "<language " . $data_line . "/>";
-        }
-    }
-    my $avg_scale = 1;  # weighted average of scale factors
-       $avg_scale = $sum_scaled / $sum_code if $sum_code;
-    
-    $data_line = "";
-    if (!$BY_FILE) {
-        $data_line .= sprintf "sum_files=\"%d\" ", $sum_files;
-    }
-    $data_line .= sprintf "blank=\"%d\" comment=\"%d\" code=\"%d\" ",
-        $sum_blank   ,
-        $sum_comment ,
-        $sum_code    ;
-    $data_line .= sprintf "factor=\"%.2f\" scaled=\"%.2f\" ",
-        $avg_scale   ,
-        $sum_scaled  
-          unless $opt_no3;
-    push @results, "<total " . $data_line . "/>";
-    push @results, "<languages>";
-    
-    foreach my $language (keys %{$languages}) {
-        push @results, "<language name=\"".$language."\"/>";
-    }
-    
-    push @results, "</languages>";
-    push @results, "</results>";
     return @results;
 } # 1}}}
 sub print_errors {                           # {{{1
@@ -1036,7 +978,13 @@ sub make_file_list {                         # {{{1
         $filename = $opt_categorized;
         $fh = new IO::File $filename, "+>";  # open for read/write
         die "Unable to write to $filename:  $!\n" unless defined $fh;
+    } elsif ($opt_sdir) {
+        # write to the user-defined scratch directory
+        $filename = $opt_sdir . '/cloc_file_list.txt';
+        $fh = new IO::File $filename, "+>";  # open for read/write
+        die "Unable to write to $filename:  $!\n" unless defined $fh;
     } else {
+        # let File::Temp create a suitable temporary file
         ($fh, $filename) = tempfile(UNLINK => 1);  # delete file on exit
         print "Using temp file list [$filename]\n" if $opt_v;
     }
@@ -1133,7 +1081,7 @@ sub remove_duplicate_files {                 # {{{1
     $n = 0;
     foreach my $bytes (sort {$a <=> $b} keys %files_by_size) {
         ++$n;
-        printf "Unique: %8d files                               \r", 
+        printf "Unique: %8d files                                          \r", 
             $n unless $n % $opt_progress_rate;
         $rh_unique_source_file->{$files_by_size{$bytes}[0]} = 1;
         next unless scalar @{$files_by_size{$bytes}} > 1;
@@ -3476,7 +3424,14 @@ EOD
 # 2}}}
     my $problems        = 0;
     $HAVE_Rexexp_Common = 0;
-    my $dir = tempdir( CLEANUP => 1 );  # 1 = delete on exit
+    my $dir             = "";
+    if ($opt_sdir) {
+        # write to the user-defined scratch directory
+        $dir = $opt_sdir;
+    } else {
+        # let File::Temp create a suitable temporary directory
+        $dir = tempdir( CLEANUP => 1 );  # 1 = delete on exit
+    }
     print "Using temp dir [$dir] to install Regexp::Common\n" if $opt_v;
     my $Regexp_dir        = "$dir/Regexp";
     my $Regexp_Common_dir = "$dir/Regexp/Common";
