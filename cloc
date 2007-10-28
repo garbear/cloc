@@ -180,8 +180,10 @@ Usage: $script [options] <file(s)/dir(s)> | <report files>
 ";
 $| = 1;  # flush STDOUT
 my $start_time = time();
-my ($opt_found                ,
+my (
     $opt_categorized          ,
+    $opt_found                ,
+    @opt_force_lang           ,
     $opt_ignored              ,
     $opt_counted              ,
     $opt_show_ext             ,
@@ -203,7 +205,7 @@ my ($opt_found                ,
     $opt_extract_with         ,
     $opt_by_file              ,
     $opt_xml                  ,
-    @opt_force_lang           ,
+    $opt_yaml                 ,
    );
 GetOptions(
            "by_file"             => \$opt_by_file             ,
@@ -244,6 +246,7 @@ GetOptions(
            "xml"                 => \$opt_xml                 ,
            "force_lang=s"        => \@opt_force_lang          ,
            "force-lang=s"        => \@opt_force_lang          ,
+           "yaml"                => \$opt_yaml                ,
           );
 
 my %Exclude_Language = ();
@@ -508,27 +511,15 @@ exit unless %Results_by_Language;
 
 my @results = ();
 unless ($opt_by_file) {
-    if ($opt_xml) {
-        @results = generate_report( $VERSION, $end_time - $start_time,
-                                   "by language",
-                                   \%Results_by_Language, \%Scale_Factor);
-    } else {
-        @results = generate_report( $VERSION, $end_time - $start_time,
-                                    "by language",
-                                   \%Results_by_Language, \%Scale_Factor);
-    }
+    @results = generate_report( $VERSION, $end_time - $start_time,
+                               "by language",
+                               \%Results_by_Language, \%Scale_Factor);
     if ($opt_report_file) { write_file($opt_report_file, @results); } 
     else                  { print "\n", join("\n", @results), "\n"; }
 } else {
-    if ($opt_xml) {
-        @results = generate_report( $VERSION, $end_time - $start_time,
-                                    "by file",
-                                    \%Results_by_File, \%Scale_Factor);
-    } else {
-        @results = generate_report( $VERSION, $end_time - $start_time,
-                                    "by file",
-                                   \%Results_by_File, \%Scale_Factor);
-    }
+    @results = generate_report( $VERSION, $end_time - $start_time,
+                                "by file",
+                                \%Results_by_File,    \%Scale_Factor);
     if ($opt_report_file) { write_file($opt_report_file, @results); } 
     else                  { print "\n", join("\n", @results), "\n"; }
 }
@@ -640,7 +631,8 @@ sub generate_report {                        # {{{1
                },
     );
     my $Style = "txt";
-       $Style = "xml" if $opt_xml;
+       $Style = "xml" if $opt_xml ;
+       $Style = "xml" if $opt_yaml;  # not a typo; just set to anything but txt
 
     my $URL        = "http://cloc.sourceforge.net";
     my $hyphen_line = sprintf "%s", '-' x 79;
@@ -663,10 +655,12 @@ sub generate_report {                        # {{{1
                         $elapsed_sec           ,
                         $sum_files/$elapsed_sec,
                         $sum_lines/$elapsed_sec) unless $opt_sum_reports;
-    if ($opt_xml) {
+    if      ($opt_xml) {
         push @results, "<?xml version=\"1.0\"?>";
         push @results, "<results>";
         push @results, "<header>$header_line</header>";
+    } elsif ($opt_yaml) {
+        push @results, "---\n# $header_line";
     } else {
         push @results, $header_line;
         push @results, $hyphen_line;
@@ -756,12 +750,24 @@ sub generate_report {                        # {{{1
             } else {
                 push @results, "<language " . $data_line . "/>";
             }
+        } elsif ($opt_yaml) {
+            push @results, $lang_or_file . ":";
+            push @results, "  blank: "  .$rhh_count->{$lang_or_file}{'blank'};
+            push @results, "  code: "   .$rhh_count->{$lang_or_file}{'code'};
+            push @results, "  comment: ".$rhh_count->{$lang_or_file}{'comment'};
+            push @results, "  nFiles: " .$rhh_count->{$lang_or_file}{'nFiles'}
+                unless $BY_FILE;
+            if (!$opt_no3) {
+                push @results, "  scaled: " . $scaled;
+                push @results, "  factor: " . $factor;
+            }
         } else {
             push @results, $data_line;
         }
     }
     my $avg_scale = 1;  # weighted average of scale factors
-       $avg_scale = $sum_scaled / $sum_code if $sum_code and !$opt_no3;
+       $avg_scale = sprintf("%.2f", $sum_scaled / $sum_code) 
+            if $sum_code and !$opt_no3;
 
     if ($opt_xml) {
         $data_line = "";
@@ -784,6 +790,16 @@ sub generate_report {                        # {{{1
         
         push @results, "</languages>";
         push @results, "</results>";
+    } elsif ($opt_yaml) {
+        push @results, "SUM:";
+        push @results, "  blank: "  . $sum_blank  ;
+        push @results, "  code: "   . $sum_code   ;
+        push @results, "  comment: ". $sum_comment;
+        push @results, "  nFiles: " . $sum_files unless $BY_FILE;
+        if (!$opt_no3) {
+            push @results, "  scaled: " . $sum_scaled;
+            push @results, "  factor: " . $avg_scale ;
+        }
     } else {
  
         if ($BY_FILE) {
