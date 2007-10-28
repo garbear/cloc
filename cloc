@@ -134,7 +134,8 @@ Usage: $script [options] <file(s)/dir(s)> | <report files>
                              end with .f90) instead of the default Fortran 77 
                              counter, use
                                --force-lang=\"Fortran 90\",f
-                             This option can be specified multiple times.
+                             The language name is case insensitive.  This 
+                             option can be specified multiple times.
    --found=<file>            Save names of every file found to <file>.
    --ignored=<file>          Save names of ignored files and the reason they
                              were ignored to <file>.
@@ -304,13 +305,21 @@ if ($opt_read_lang_def) {
 }
 
 # Process command line provided extention-to-language mapping overrides.
+# Make a hash of known languages in lower case for easier matching.
+my %Recognized_Language_lc = (); # key = language name in lc, value = true name
+foreach my $language (keys %Filters_by_Language) {
+    my $lang_lc = lc $language;
+    $Recognized_Language_lc{$lang_lc} = $language;
+}
 foreach my $pair (@opt_force_lang) {
-    my ($language, $extension) = split(',', $pair);
-    die "Unknown language '$language' used with --force_lang option.  The command\n" .
-        "  $script --show_lang\n" .
+    my ($lang, $extension) = split(',', $pair);
+    my $lang_lc = lc $lang;
+
+    die "Unknown language '$lang' used with --force-lang option.  " .
+        "The command\n  $script --show-lang\n" .
         "will print all recognized languages.\n" 
-        unless defined @{$Filters_by_Language{$language}};
-    $Language_by_Extension{$extension} = $language;
+        unless $Recognized_Language_lc{$lang_lc}; 
+    $Language_by_Extension{$extension} = $Recognized_Language_lc{$lang_lc};
 }
 
 # 1}}}
