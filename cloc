@@ -283,7 +283,7 @@ if ($opt_read_lang_def) {
         $opt_read_lang_def     , #        Sample values:
         \%Language_by_Extension, # Language_by_Extension{f}    = 'Fortran 77' 
         \%Language_by_Script   , # Language_by_Script{sh}      = 'Bourne Shell'
-        \%Language_by_File     , # Language_by_File{makefile}  = 'Make'
+        \%Language_by_File     , # Language_by_File{makefile}  = 'make'
         \%Filters_by_Language  , # Filters_by_Language{Bourne Shell}[0] = 
                                  #      [ 'remove_matches' , '^\s*#'  ]
         \%Not_Code_Extension   , # Not_Code_Extension{jpg}     = 1
@@ -294,7 +294,7 @@ if ($opt_read_lang_def) {
     set_constants(               #
         \%Language_by_Extension, # Language_by_Extension{f}    = 'Fortran 77' 
         \%Language_by_Script   , # Language_by_Script{sh}      = 'Bourne Shell'
-        \%Language_by_File     , # Language_by_File{makefile}  = 'Make'
+        \%Language_by_File     , # Language_by_File{makefile}  = 'make'
         \%Filters_by_Language  , # Filters_by_Language{Bourne Shell}[0] = 
                                  #      [ 'remove_matches' , '^\s*#'  ]
         \%Not_Code_Extension   , # Not_Code_Extension{jpg}     = 1
@@ -1774,8 +1774,8 @@ sub set_constants {                          # {{{1
             'fmt'         => "Oracle Forms"          ,
             'focexec'     => "Focus"                 ,
             'frm'         => "Visual Basic"          ,
-            'gnumakefile' => 'Make'                  ,
-            'Gnumakefile' => 'Make'                  ,
+            'gnumakefile' => 'make'                  ,
+            'Gnumakefile' => 'make'                  ,
             'h'           => 'C/C++ Header'          ,
             'H'           => 'C/C++ Header'          ,
             'hh'          => 'C/C++ Header'          ,
@@ -1799,8 +1799,8 @@ sub set_constants {                          # {{{1
             'lsp'         => 'Lisp'                  ,
             'lua'         => 'Lua'                   ,
             "m3"          => "Modula3"               , 
-            'makefile'    => 'Make'                  ,
-            'Makefile'    => 'Make'                  ,
+            'makefile'    => 'make'                  ,
+            'Makefile'    => 'make'                  ,
             'met'         => 'Teamcenter met'        ,
             "mg"          => "Modula3"               , 
             "mli"         => "ML"                    ,
@@ -1870,7 +1870,7 @@ sub set_constants {                          # {{{1
             'csh'      => 'C Shell'               ,
             'idl'      => 'IDL'                   ,
             'ksh'      => 'Korn Shell'            ,
-            'make'     => 'Make'                  ,
+            'make'     => 'make'                  ,
             'octave'   => 'Octave'                ,
             'perl5'    => 'Perl'                  ,
             'perl'     => 'Perl'                  ,
@@ -1883,10 +1883,10 @@ sub set_constants {                          # {{{1
             );
 # 1}}}
 %{$rh_Language_by_File}      = (                 # {{{1
-            'Makefile'    => 'Make'                  ,
-            'makefile'    => 'Make'                  ,
-            'gnumakefile' => 'Make'                  ,
-            'Gnumakefile' => 'Make'                  ,
+            'Makefile'    => 'make'                  ,
+            'makefile'    => 'make'                  ,
+            'gnumakefile' => 'make'                  ,
+            'Gnumakefile' => 'make'                  ,
             );
 # 1}}}
 %{$rhaa_Filters_by_Language} = (                 # {{{1
@@ -1947,7 +1947,7 @@ sub set_constants {                          # {{{1
     'Lisp'               => [   [ 'remove_matches'      , '^\s*;'  ], ],
     'LiveLink OScript'   => [   [ 'remove_matches'      , '^\s*//' ], ],
     'Lua'                => [   [ 'call_regexp_common'  , 'lua'    ], ],
-    'Make'               => [   [ 'remove_matches'      , '^\s*#'  ], ], 
+    'make'               => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'MATLAB'             => [   [ 'remove_matches'      , '^\s*%'  ], ], 
     'Modula3'            => [   [ 'call_regexp_common'  , 'Pascal' ], ],
         # Modula 3 comments are (* ... *) so applying the Pascal filter
@@ -2400,7 +2400,7 @@ sub set_constants {                          # {{{1
     'magec'                        =>   5.00,
     'magik'                        =>   3.81,
     'Lake'                         =>   3.81,
-'Make'                       =>   2.50,
+    'make'                         =>   2.50,
     'mantis'                       =>   2.96,
     'mapper'                       =>   0.99,
     'mark iv'                      =>   2.00,
