@@ -1797,7 +1797,7 @@ sub set_constants {                          # {{{1
             "lhs"         => "Haskell"               ,
             'l'           => 'lex'                   ,
             'lsp'         => 'Lisp'                  ,
-            'lua'         => 'lua'                   ,
+            'lua'         => 'Lua'                   ,
             "m3"          => "Modula3"               , 
             'makefile'    => 'Make'                  ,
             'Makefile'    => 'Make'                  ,
@@ -1946,7 +1946,7 @@ sub set_constants {                          # {{{1
     'JCL'                => [   [ 'remove_jcl_comments' ,          ], ],
     'Lisp'               => [   [ 'remove_matches'      , '^\s*;'  ], ],
     'LiveLink OScript'   => [   [ 'remove_matches'      , '^\s*//' ], ],
-    'lua'                => [   [ 'call_regexp_common'  , 'lua'    ], ],
+    'Lua'                => [   [ 'call_regexp_common'  , 'lua'    ], ],
     'Make'               => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'MATLAB'             => [   [ 'remove_matches'      , '^\s*%'  ], ], 
     'Modula3'            => [   [ 'call_regexp_common'  , 'Pascal' ], ],
@@ -2664,7 +2664,7 @@ sub set_constants {                          # {{{1
 'Python'  => 4.20,
 'Ruby'    => 4.20,
 'sed'     => 4.00,
-'lua'     => 4.00,
+'Lua'     => 4.00,
 );
 # 1}}}
 %{$rh_Known_Binary_Archives} = (                 # {{{1
