@@ -1,9 +1,9 @@
-http://cloc.sourceforge.net v 0.90
--------------------------------------------------------------------------------
-Report File       files     blank   comment      code    scale   3rd gen. equiv
--------------------------------------------------------------------------------
-out.11.lang          14        20        30        87 x   1.27 =         110.13
-out.12.lang           9        14        26        60 x   2.09 =         125.32
--------------------------------------------------------------------------------
-SUM:                 23        34        56       147 x   1.60 =         235.45
--------------------------------------------------------------------------------
+<?xml version="1.0"?>
+<results>
+<header>http://cloc.sourceforge.net v 1.00</header>
+<language name="out.11.lang" files_count="14" blank="20" comment="30" code="87" factor="1.27" scaled="110.13" />
+<language name="out.12.lang" files_count="9" blank="14" comment="26" code="60" factor="2.09" scaled="125.32" />
+<total sum_files="23" blank="34" comment="56" code="147" factor="1.60" scaled="235.45" />
+<languages>
+</languages>
+</results>

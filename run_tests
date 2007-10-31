@@ -10,6 +10,9 @@ GetOptions("skip-diff"    => \$opt_skip_diff ,
 my $CLOC       = "./cloc-0.90.pl";
    $CLOC       = "./cloc";
 
+# options
+   $CLOC      .= " --exclude-dir .svn ";
+
 my $TESTDIR    = "./testcode";
 my $SOLN       = "./correct_outs";
 my $nPass      = 0;
@@ -65,7 +68,7 @@ if (@fail_cases) {
     printf "PASSED=%d  FAILED=%d", $nPass, $nFail;
     printf " (", join(",", @fail_cases), ")\n";
 } else {
-    printf "All %d tests passed!\n";
+    printf "All %d tests passed!\n", $nPass;
 }
 
 __END__
