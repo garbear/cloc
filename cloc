@@ -311,8 +311,10 @@ foreach my $language (keys %Filters_by_Language) {
     my $lang_lc = lc $language;
     $Recognized_Language_lc{$lang_lc} = $language;
 }
+my %Forced_Extension = (); # file name extensions which user wants to count
 foreach my $pair (@opt_force_lang) {
     my ($lang, $extension) = split(',', $pair);
+    $Forced_Extension{$extension} = $lang;
     my $lang_lc = lc $lang;
 
     die "Unknown language '$lang' used with --force-lang option.  " .
@@ -1198,7 +1200,11 @@ sub classify_file {                          # {{{1
     if ($file =~ /\.(\w+)$/) { # has an extension
         print "$full_file extension=[$1]\n" if $opt_v > 2;
         my $extension = $1;
-        if ($Not_Code_Extension{$extension}) {
+        if ($Not_Code_Extension{$extension} and 
+           !$Forced_Extension{$extension}) {
+           # If .1 (for example) is an extention that would ordinarily be
+           # ignored but the user has insisted this be counted with the
+           # --force-lang option, then go ahead and count it.
             $rh_ignored->{$full_file} = 
                 'listed in $Not_Code_Extension{' . $extension . '}';
             return $language;
