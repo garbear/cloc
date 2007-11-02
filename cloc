@@ -112,7 +112,7 @@ Usage: $script [options] <file(s)/dir(s)> | <report files>
    --exclude-dir=<D1>[,D2,]  Exclude the given comma separated directories
                              D1, D2, D3, et cetera, from being scanned.  For
                              example  --exclude-dir=.cvs,.svn  will skip
-                             all files that have /.csv/ or /.svn/ as part of 
+                             all files that have /.cvs/ or /.svn/ as part of 
                              their path.
    --exclude-lang=<L1>[,L2,] Exclude the given comma separated languages
                              L1, L2, L3, et cetera, from being counted.
@@ -175,6 +175,7 @@ Usage: $script [options] <file(s)/dir(s)> | <report files>
                              custom language definitions (see --read-lang-def).
    -v[=<n>]                  Verbose switch (optional numeric value).
    --version                 Print the version of this program and exit.
+   --csv                     Write the results as comma separated values.
    --xml                     Write the results in XML.
    --yaml                    Write the results in YAML.
 
@@ -207,6 +208,7 @@ my (
     $opt_by_file              ,
     $opt_xml                  ,
     $opt_yaml                 ,
+    $opt_csv                  ,
    );
 GetOptions(
            "by_file"             => \$opt_by_file             ,
@@ -248,6 +250,7 @@ GetOptions(
            "force_lang=s"        => \@opt_force_lang          ,
            "force-lang=s"        => \@opt_force_lang          ,
            "yaml"                => \$opt_yaml                ,
+           "csv"                 => \$opt_csv                 ,
           );
 
 my %Exclude_Language = ();
@@ -644,6 +647,7 @@ sub generate_report {                        # {{{1
     my $Style = "txt";
        $Style = "xml" if $opt_xml ;
        $Style = "xml" if $opt_yaml;  # not a typo; just set to anything but txt
+       $Style = "xml" if $opt_csv ;  # not a typo; just set to anything but txt
 
     my $URL        = "http://cloc.sourceforge.net";
     my $hyphen_line = sprintf "%s", '-' x 79;
@@ -672,6 +676,8 @@ sub generate_report {                        # {{{1
         push @results, "<header>$header_line</header>";
     } elsif ($opt_yaml) {
         push @results, "---\n# $header_line";
+    } elsif ($opt_csv) {
+        push @results, '"' . $header_line . '"';
     } else {
         push @results, $header_line;
         push @results, $hyphen_line;
@@ -695,6 +701,13 @@ sub generate_report {                        # {{{1
               unless $opt_no3;
         push @results, $data_line;
         push @results, $hyphen_line;
+    }
+    if ($opt_csv) {
+        my $header2 = " ,";
+        $header2 = " ,files" unless $BY_FILE;
+        $header2 .= ",blank,comment,code";
+        $header2 .= ",scale,3rd gen. equiv" unless $opt_no3;
+        push @results, $header2;
     }
 
     my $sum_scaled = 0;
@@ -763,15 +776,24 @@ sub generate_report {                        # {{{1
             }
         } elsif ($opt_yaml) {
             push @results, $lang_or_file . ":";
-            push @results, "  blank: "  .$rhh_count->{$lang_or_file}{'blank'};
-            push @results, "  code: "   .$rhh_count->{$lang_or_file}{'code'};
+            push @results, "  nFiles: " .$rhh_count->{$lang_or_file}{'nFiles'} ;
+            push @results, "  blank: "  .$rhh_count->{$lang_or_file}{'blank'}  ;
             push @results, "  comment: ".$rhh_count->{$lang_or_file}{'comment'};
-            push @results, "  nFiles: " .$rhh_count->{$lang_or_file}{'nFiles'}
+            push @results, "  code: "   .$rhh_count->{$lang_or_file}{'code'} 
                 unless $BY_FILE;
             if (!$opt_no3) {
                 push @results, "  scaled: " . $scaled;
                 push @results, "  factor: " . $factor;
             }
+        } elsif ($opt_csv) {
+            my $extra_3 = "";
+               $extra_3 = ",$factor,$scaled" unless $opt_no3;
+            push @results, $lang_or_file                         . "," .
+                           $rhh_count->{$lang_or_file}{'nFiles'} . "," .
+                           $rhh_count->{$lang_or_file}{'blank'}  . "," .
+                           $rhh_count->{$lang_or_file}{'comment'}. "," .
+                           $rhh_count->{$lang_or_file}{'code'}         .
+                           $extra_3;
         } else {
             push @results, $data_line;
         }
@@ -811,6 +833,8 @@ sub generate_report {                        # {{{1
             push @results, "  scaled: " . $sum_scaled;
             push @results, "  factor: " . $avg_scale ;
         }
+    } elsif ($opt_csv) {
+        # do nothing
     } else {
  
         if ($BY_FILE) {
