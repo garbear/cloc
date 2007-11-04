@@ -11,11 +11,11 @@
 <language name="COBOL" files_count="2" blank="2" comment="5" code="10" factor="1.04" scaled="10.40" />
 <language name="Fortran 90" files_count="2" blank="1" comment="3" code="9" factor="1.00" scaled="9.00" />
 <language name="Visual Basic" files_count="1" blank="4" comment="2" code="6" factor="2.76" scaled="16.56" />
-<language name="ColdFusion" files_count="1" blank="1" comment="0" code="4" factor="4.00" scaled="16.00" />
 <language name="XML" files_count="1" blank="0" comment="2" code="3" factor="1.90" scaled="5.70" />
+<language name="ColdFusion" files_count="1" blank="1" comment="2" code="2" factor="4.00" scaled="8.00" />
 <language name="DOS Batch" files_count="1" blank="1" comment="2" code="2" factor="0.63" scaled="1.26" />
 <language name="Focus" files_count="1" blank="1" comment="2" code="1" factor="1.90" scaled="1.90" />
-<total sum_files="23" blank="34" comment="56" code="147" factor="1.60" scaled="235.45" />
+<total sum_files="23" blank="34" comment="58" code="145" factor="1.57" scaled="227.45" />
 <languages>
 </languages>
 </results>
