@@ -1666,6 +1666,37 @@ sub remove_jsp_comments {                    # {{{1
     print "<- remove_jsp_comments\n" if $opt_v > 2;
     return @save_lines;
 } # 1}}}
+sub remove_html_comments {                   # {{{1
+    #  HTML comment is   <!--  body of comment   -->
+    #  Need to use my own routine until the HTML comment regex in
+    #  the Regexp::Common module can handle  <!--  --  -->
+    my ($ra_lines, ) = @_;
+
+    print "-> remove_html_comments\n" if $opt_v > 2;
+
+    my @save_lines = ();
+    my $in_comment = 0;
+    foreach (@{$ra_lines}) {
+
+        next if /^\s*$/;
+        s/<!\-\-.*?\-\->//g;  # strip one-line comments
+        next if /^\s*$/;
+        if ($in_comment) {
+            if (/\-\->/) {
+                s/^.*?\-\->//;
+                $in_comment = 0;
+            }
+        }
+        next if /^\s*$/;
+        $in_comment = 1 if /^(.*?)<!\-\-/;
+        next if defined $1 and $1 =~ /^\s*$/;
+        next if ($in_comment);
+        push @save_lines, $_;
+    }
+
+    print "<- remove_html_comments\n" if $opt_v > 2;
+    return @save_lines;
+} # 1}}}
 sub determine_lit_type {                     # {{{1
   my ($file) = @_;
 
@@ -1950,12 +1981,14 @@ sub set_constants {                          # {{{1
     'CCS'                => [   [ 'call_regexp_common'  , 'C'      ], ],
     'CSS'                => [   [ 'call_regexp_common'  , 'C'      ], ],
     'COBOL'              => [   [ 'remove_cobol_comments',         ], ],
-    'ColdFusion'         => [   [ 'call_regexp_common'  , 'HTML'   ], ],
+    'ColdFusion'         => [   [ 'remove_html_comments',          ],
+                                [ 'call_regexp_common'  , 'HTML'   ], ],
     'Crystal Reports'    => [   [ 'remove_matches'      , '^\s*//' ], ],
     'DAL'                => [   [ 'remove_between'      , '[]',    ], ],
     'NASTRAN DMAP'       => [   [ 'remove_matches'      , '^\s*\$' ], ],
     'DOS Batch'          => [   [ 'remove_matches'      , '^\s*rem', ], ],
-    'DTD'                => [   [ 'call_regexp_common'  , 'HTML'   ], ],
+    'DTD'                => [   [ 'remove_html_comments',          ],
+                                [ 'call_regexp_common'  , 'HTML'   ], ],
     'Expect'             => [   [ 'remove_matches'      , '^\s*#'  ], ], 
     'Focus'              => [   [ 'remove_matches'      , '^\s*\-\*'  ], ],
     'Fortran 77'         => [   [ 'remove_f77_comments' ,          ], ],
@@ -1963,10 +1996,12 @@ sub set_constants {                          # {{{1
                                 [ 'remove_f90_comments' ,          ], ],
     'Fortran 95'         => [   [ 'remove_f77_comments' ,          ],
                                 [ 'remove_f90_comments' ,          ], ],
-    'HTML'               => [   [ 'call_regexp_common'  , 'HTML'   ], ],
+    'HTML'               => [   [ 'remove_html_comments',          ],
+                                [ 'call_regexp_common'  , 'HTML'   ], ],
     'Haskell'            => [   [ 'remove_haskell_comments', '>filename<' ], ],
     'IDL'                => [   [ 'remove_matches'      , '^\s*;'  ], ],
-    'JSP'                => [   [ 'call_regexp_common'  , 'HTML'   ],
+    'JSP'                => [   [ 'remove_html_comments',          ],
+                                [ 'call_regexp_common'  , 'HTML'   ],
                                 [ 'remove_jsp_comments',           ], ],
     'Java'               => [   
                                 [ 'remove_matches'      , '^\s*//' ], 
@@ -2031,11 +2066,16 @@ sub set_constants {                          # {{{1
     'yacc'               => [   [ 'call_regexp_common'  , 'C'      ], ],
     'YAML'               => [   [ 'remove_matches'      , '^\s*#'  ], ],
     'lex'                => [   [ 'call_regexp_common'  , 'C'      ], ],
-    'XML'                => [   [ 'call_regexp_common'  , 'HTML'   ], ],
-    'XSD'                => [   [ 'call_regexp_common'  , 'HTML'   ], ],
-    'XSLT'               => [   [ 'call_regexp_common'  , 'HTML'   ], ],
-    'NAnt scripts'       => [   [ 'call_regexp_common'  , 'HTML'   ], ],
-    'MSBuild scripts'    => [   [ 'call_regexp_common'  , 'HTML'   ], ],
+    'XML'                => [   [ 'remove_html_comments',          ],
+                                [ 'call_regexp_common'  , 'HTML'   ], ],
+    'XSD'                => [   [ 'remove_html_comments',          ],
+                                [ 'call_regexp_common'  , 'HTML'   ], ],
+    'XSLT'               => [   [ 'remove_html_comments',          ],
+                                [ 'call_regexp_common'  , 'HTML'   ], ],
+    'NAnt scripts'       => [   [ 'remove_html_comments',          ],
+                                [ 'call_regexp_common'  , 'HTML'   ], ],
+    'MSBuild scripts'    => [   [ 'remove_html_comments',          ],
+                                [ 'call_regexp_common'  , 'HTML'   ], ],
     );
 # 1}}}
 %{$rh_Not_Code_Extension}    = (                 # {{{1
