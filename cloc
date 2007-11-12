@@ -677,7 +677,9 @@ sub generate_report {                        # {{{1
     } elsif ($opt_yaml) {
         push @results, "---\n# $header_line";
     } elsif ($opt_csv) {
-        push @results, '"' . $header_line . '"';
+        # append the header to the end of the column headers
+        # to keep the output a bit cleaner from a spreadsheet
+        # perspective
     } else {
         push @results, $header_line;
         push @results, $hyphen_line;
@@ -707,6 +709,7 @@ sub generate_report {                        # {{{1
         $header2 = " ,files" unless $BY_FILE;
         $header2 .= ",blank,comment,code";
         $header2 .= ",scale,3rd gen. equiv" unless $opt_no3;
+        $header2 .= ',"' . $header_line . '"';
         push @results, $header2;
     }
 
